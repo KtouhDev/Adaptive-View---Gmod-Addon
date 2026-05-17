@@ -2,10 +2,32 @@ PM_EBLANSKY_ADAPTIVE_VIEW = PM_EBLANSKY_ADAPTIVE_VIEW or {}
 
 local AV = PM_EBLANSKY_ADAPTIVE_VIEW
 local NET_SETTINGS = "pmav_settings"
+local NET_BOUNDS = "pmav_bounds"
+local GetRule
+AV.ModelCollisionBounds = {}
+AV.Generation = (AV.Generation or 0) + 1
+local GENERATION = AV.Generation
 
 if SERVER then
     AddCSLuaFile("autorun/client/pm_eblansky_adaptive_view.lua")
     util.AddNetworkString(NET_SETTINGS)
+    util.AddNetworkString(NET_BOUNDS)
+
+    local entityMeta = FindMetaTable("Entity")
+
+    if entityMeta and not AV.CollisionBoundsPatched then
+        AV.OriginalSetCollisionBounds = AV.OriginalSetCollisionBounds or entityMeta.SetCollisionBounds
+
+        function entityMeta:SetCollisionBounds(mins, maxs)
+            if not AV.InternalCollisionApply and IsValid(self) and self.pmavBlockExternalCollisionBounds then
+                return
+            end
+
+            return AV.OriginalSetCollisionBounds(self, mins, maxs)
+        end
+
+        AV.CollisionBoundsPatched = true
+    end
 end
 
 local function NormalizeModel(model)
@@ -22,10 +44,93 @@ local function NumberOr(value, fallback)
     return value
 end
 
+local function GetStableModelBounds(ent, fallbackMins, fallbackMaxs)
+    if not IsValid(ent) then
+        return fallbackMins, fallbackMaxs
+    end
+
+    local model = NormalizeModel(ent:GetModel())
+
+    if model == "" then
+        return fallbackMins, fallbackMaxs
+    end
+
+    local cached = AV.ModelCollisionBounds[model]
+
+    if cached then
+        return Vector(cached.mins.x, cached.mins.y, cached.mins.z), Vector(cached.maxs.x, cached.maxs.y, cached.maxs.z)
+    end
+
+    local mins, maxs = ent:GetModelBounds()
+
+    mins = mins or fallbackMins or Vector(-16, -16, 0)
+    maxs = maxs or fallbackMaxs or Vector(16, 16, 72)
+
+    cached = {
+        mins = Vector(mins.x, mins.y, mins.z),
+        maxs = Vector(maxs.x, maxs.y, maxs.z)
+    }
+    AV.ModelCollisionBounds[model] = cached
+
+    return Vector(cached.mins.x, cached.mins.y, cached.mins.z), Vector(cached.maxs.x, cached.maxs.y, cached.maxs.z)
+end
+
+local function GetSaneHorizontalBounds(modelMins, modelMaxs, defaultMins, defaultMaxs)
+    local minX = NumberOr(modelMins and modelMins.x, defaultMins.x)
+    local minY = NumberOr(modelMins and modelMins.y, defaultMins.y)
+    local maxX = NumberOr(modelMaxs and modelMaxs.x, defaultMaxs.x)
+    local maxY = NumberOr(modelMaxs and modelMaxs.y, defaultMaxs.y)
+    local halfX = math.max(math.abs(minX), math.abs(maxX))
+    local halfY = math.max(math.abs(minY), math.abs(maxY))
+
+    -- Some models report broken bounds: tiny foot-only boxes, or giant boxes
+    -- caused by accessories/weapons. Use the smaller sane axis when one axis
+    -- explodes, then clamp to movement-friendly player hull sizes.
+    local smaller = math.min(halfX, halfY)
+    local larger = math.max(halfX, halfY)
+
+    if smaller > 0 and larger / smaller > 2.25 then
+        halfX = smaller
+        halfY = smaller
+    end
+
+    halfX = math.Clamp(halfX, 12, 32)
+    halfY = math.Clamp(halfY, 12, 32)
+
+    return -halfX, -halfY, halfX, halfY
+end
+
+local function GetCollisionBodyHeight(ent, settings, modelMaxs, fallbackHeight)
+    local rule = GetRule(settings, ent:GetModel())
+
+    if rule and rule.mode == "height" then
+        return rule.height + settings.globalOffset + (rule.offset or 0)
+    end
+
+    local modelHeight = NumberOr(modelMaxs and modelMaxs.z, fallbackHeight or 72)
+
+    return math.Clamp(modelHeight + settings.globalOffset + (rule and rule.offset or 0), 12, 180)
+end
+
 local function NearlyEqualVector(a, b, epsilon)
     epsilon = epsilon or 0.01
 
     return math.abs(a.x - b.x) <= epsilon and math.abs(a.y - b.y) <= epsilon and math.abs(a.z - b.z) <= epsilon
+end
+
+local function BroadcastBounds(ent, mins, maxs, duckMins, duckMaxs)
+    net.Start(NET_BOUNDS)
+    net.WriteEntity(ent)
+    net.WriteVector(mins)
+    net.WriteVector(maxs)
+    net.WriteBool(duckMins ~= nil and duckMaxs ~= nil)
+
+    if duckMins and duckMaxs then
+        net.WriteVector(duckMins)
+        net.WriteVector(duckMaxs)
+    end
+
+    net.Broadcast()
 end
 
 local function SetPlayerHullStable(ply, mins, maxs, duckMins, duckMaxs)
@@ -42,6 +147,7 @@ local function SetPlayerHullStable(ply, mins, maxs, duckMins, duckMaxs)
         NearlyEqualVector(ply.pmavLastDuckMins, duckMins) and
         NearlyEqualVector(ply.pmavLastDuckMaxs, duckMaxs) and
         actualMatches then
+        BroadcastBounds(ply, mins, maxs, duckMins, duckMaxs)
         return
     end
 
@@ -52,6 +158,8 @@ local function SetPlayerHullStable(ply, mins, maxs, duckMins, duckMaxs)
 
     ply:SetHull(mins, maxs)
     ply:SetHullDuck(duckMins, duckMaxs)
+
+    BroadcastBounds(ply, mins, maxs, duckMins, duckMaxs)
 end
 
 local function SetPlayerViewOffsetsStable(ply, stand, duck)
@@ -71,6 +179,164 @@ local function SetPlayerViewOffsetsStable(ply, stand, duck)
 
     ply:SetViewOffset(stand)
     ply:SetViewOffsetDucked(duck)
+end
+
+local function SetEntityCollisionBoundsStable(ent, mins, maxs)
+    if ent.pmavLastBoundsMins and
+        NearlyEqualVector(ent.pmavLastBoundsMins, mins) and
+        NearlyEqualVector(ent.pmavLastBoundsMaxs, maxs) then
+        BroadcastBounds(ent, mins, maxs)
+        return
+    end
+
+    ent.pmavLastBoundsMins = Vector(mins.x, mins.y, mins.z)
+    ent.pmavLastBoundsMaxs = Vector(maxs.x, maxs.y, maxs.z)
+    ent.pmavAdaptiveBoundsApplied = true
+    ent.pmavBlockExternalCollisionBounds = true
+
+    AV.InternalCollisionApply = true
+    ent:SetCollisionBounds(mins, maxs)
+    AV.InternalCollisionApply = false
+
+    BroadcastBounds(ent, mins, maxs)
+end
+
+local function IsPointInsideBounds(localPos, mins, maxs, padding)
+    padding = padding or 0
+
+    return localPos.x >= mins.x - padding and localPos.x <= maxs.x + padding and
+        localPos.y >= mins.y - padding and localPos.y <= maxs.y + padding and
+        localPos.z >= mins.z - padding and localPos.z <= maxs.z + padding
+end
+
+local function IsUsableDamagePoint(pos)
+    return pos and pos ~= vector_origin and pos.x == pos.x and pos.y == pos.y and pos.z == pos.z
+end
+
+local function IsWorldPointInsideAdaptiveBounds(ent, pos, padding)
+    return IsUsableDamagePoint(pos) and IsPointInsideBounds(ent:WorldToLocal(pos), ent.pmavLastBoundsMins, ent.pmavLastBoundsMaxs, padding or 1)
+end
+
+local function RayIntersectsAdaptiveBounds(ent, startPos, direction, padding)
+    if not IsUsableDamagePoint(startPos) or not direction then
+        return false
+    end
+
+    padding = padding or 1
+
+    local localStart = ent:WorldToLocal(startPos)
+    local localEnd = ent:WorldToLocal(startPos + direction * 32768)
+    local localDir = localEnd - localStart
+
+    if localDir:LengthSqr() <= 0.0001 then
+        return false
+    end
+
+    localDir:Normalize()
+
+    local mins = Vector(
+        ent.pmavLastBoundsMins.x - padding,
+        ent.pmavLastBoundsMins.y - padding,
+        ent.pmavLastBoundsMins.z - padding
+    )
+    local maxs = Vector(
+        ent.pmavLastBoundsMaxs.x + padding,
+        ent.pmavLastBoundsMaxs.y + padding,
+        ent.pmavLastBoundsMaxs.z + padding
+    )
+
+    local tMin = 0
+    local tMax = 32768
+
+    local function testAxis(startValue, dirValue, minValue, maxValue)
+        if math.abs(dirValue) < 0.000001 then
+            return startValue >= minValue and startValue <= maxValue, tMin, tMax
+        end
+
+        local inv = 1 / dirValue
+        local t1 = (minValue - startValue) * inv
+        local t2 = (maxValue - startValue) * inv
+
+        if t1 > t2 then
+            t1, t2 = t2, t1
+        end
+
+        tMin = math.max(tMin, t1)
+        tMax = math.min(tMax, t2)
+
+        return tMin <= tMax, tMin, tMax
+    end
+
+    local ok = testAxis(localStart.x, localDir.x, mins.x, maxs.x)
+
+    if not ok then
+        return false
+    end
+
+    ok = testAxis(localStart.y, localDir.y, mins.y, maxs.y)
+
+    if not ok then
+        return false
+    end
+
+    ok = testAxis(localStart.z, localDir.z, mins.z, maxs.z)
+
+    return ok
+end
+
+local function ShouldBlockAdaptiveDamage(ent, dmginfo)
+    if not IsValid(ent) or ent:IsPlayer() or not ent.pmavAdaptiveBoundsApplied then
+        return false
+    end
+
+    if not ent.pmavLastBoundsMins or not ent.pmavLastBoundsMaxs or not dmginfo then
+        return false
+    end
+
+    local attacker = dmginfo:GetAttacker()
+
+    if IsValid(attacker) and attacker:IsPlayer() and isfunction(attacker.GetAimVector) then
+        local startPos = isfunction(attacker.GetShootPos) and attacker:GetShootPos() or attacker:EyePos()
+        local direction = attacker:GetAimVector()
+
+        return not RayIntersectsAdaptiveBounds(ent, startPos, direction, 1)
+    end
+
+    if ent.pmavLastBulletHitPos and ent.pmavLastBulletHitTime and CurTime() - ent.pmavLastBulletHitTime <= 0.1 then
+        return not IsWorldPointInsideAdaptiveBounds(ent, ent.pmavLastBulletHitPos, 1)
+    end
+
+    if IsValid(attacker) and attacker:IsPlayer() and isfunction(attacker.GetEyeTrace) then
+        local trace = attacker:GetEyeTrace()
+
+        if trace and trace.Entity == ent and IsUsableDamagePoint(trace.HitPos) then
+            return not IsWorldPointInsideAdaptiveBounds(ent, trace.HitPos, 1)
+        end
+    end
+
+    local candidatePositions = {}
+
+    if isfunction(dmginfo.GetDamagePosition) then
+        candidatePositions[#candidatePositions + 1] = dmginfo:GetDamagePosition()
+    end
+
+    if isfunction(dmginfo.GetReportedPosition) then
+        candidatePositions[#candidatePositions + 1] = dmginfo:GetReportedPosition()
+    end
+
+    local checkedAny = false
+
+    for _, pos in ipairs(candidatePositions) do
+        if IsUsableDamagePoint(pos) then
+            checkedAny = true
+
+            if IsWorldPointInsideAdaptiveBounds(ent, pos, 1) then
+                return false
+            end
+        end
+    end
+
+    return checkedAny
 end
 
 local function InvalidatePlayerStableState(ply)
@@ -131,12 +397,14 @@ local function SanitizeSettings(settings)
         collision = settings.collision ~= false,
         collisionMode = math.Clamp(math.floor(NumberOr(settings.collisionMode, 3)), 0, 3),
         collisionRadius = math.Clamp(NumberOr(settings.collisionRadius, 16), 0, 24),
+        collisionOnlyPlayers = settings.collisionOnlyPlayers == true,
+        npcCollision = settings.npcCollision ~= false,
         multiplayerSafe = settings.multiplayerSafe ~= false,
         rules = rules
     }
 end
 
-local function GetRule(settings, model)
+GetRule = function(settings, model)
     return settings.rules[NormalizeModel(model)]
 end
 
@@ -189,7 +457,7 @@ local function GetModelAutoHeight(ply, settings)
 
     if not modelHeight then
         local _, maxs = ply:GetModelBounds()
-        modelHeight = math.max(NumberOr(maxs.z, 72) * settings.autoScale, 1)
+        modelHeight = math.max(NumberOr(maxs and maxs.z, 72) * settings.autoScale, 1)
     end
 
     local minHeight = settings.minHeight
@@ -209,6 +477,9 @@ local function GetTargetHeights(ply, settings)
     standHeight = standHeight + settings.globalOffset + (rule and rule.offset or 0)
 
     local mins, maxs = ply:GetModelBounds()
+    mins = mins or Vector(0, 0, 0)
+    maxs = maxs or Vector(16, 16, 72)
+
     local footSafeHeight = math.max(NumberOr(mins.z, 0) + 8, 4)
     standHeight = math.Clamp(standHeight, footSafeHeight, math.max(settings.maxHeight, footSafeHeight))
 
@@ -218,6 +489,23 @@ local function GetTargetHeights(ply, settings)
     local duckHeight = math.max(standHeight * duckRatio, footSafeHeight)
 
     return standHeight, duckHeight, mins, maxs
+end
+
+local function GetEntityTargetHeight(ent, settings, modelMins, modelMaxs)
+    local rule = GetRule(settings, ent:GetModel())
+
+    if not settings.enabled or rule and rule.mode == "off" then
+        return nil
+    end
+
+    local targetHeight = rule and rule.mode == "height" and rule.height or
+        math.max(NumberOr(modelMaxs and modelMaxs.z, 72) * settings.autoScale, 1)
+
+    targetHeight = targetHeight + settings.globalOffset + (rule and rule.offset or 0)
+
+    local footSafeHeight = math.max(NumberOr(modelMins and modelMins.z, 0) + 8, 4)
+
+    return math.Clamp(targetHeight, footSafeHeight, math.max(settings.maxHeight, footSafeHeight))
 end
 
 if CLIENT then
@@ -233,6 +521,8 @@ if CLIENT then
             collision = GetConVar("pmav_collision"):GetBool(),
             collisionMode = GetConVar("pmav_collision_mode"):GetInt(),
             collisionRadius = GetConVar("pmav_collision_radius"):GetFloat(),
+            collisionOnlyPlayers = GetConVar("pmav_collision_only_players"):GetBool(),
+            npcCollision = GetConVar("pmav_npc_collision"):GetBool(),
             multiplayerSafe = GetConVar("pmav_multiplayer_safe"):GetBool(),
             rules = AV.ModelRules or {}
         })
@@ -257,6 +547,7 @@ end
 
 AV.PlayerSettings = AV.PlayerSettings or {}
 AV.SharedSettings = AV.SharedSettings or SanitizeSettings({})
+AV.ManagedEntities = AV.ManagedEntities or {}
 
 local function CopySettingsForWorld(settings)
     local copied = table.Copy(settings or AV.SharedSettings or SanitizeSettings({}))
@@ -335,19 +626,20 @@ local function ApplyPlayer(ply)
     if settings.collision and settings.collisionMode > 0 then
         local resizeHeight = settings.collisionMode == 1 or settings.collisionMode == 3
         local resizeWidth = settings.collisionMode == 2 or settings.collisionMode == 3
-        local hullHeight = resizeHeight and math.Clamp(standHeight + 8, 18, 180) or ply.pmavDefaultHullMaxs.z
-        local duckHullHeight = resizeHeight and math.Clamp(duckHeight + 6, 12, 120) or ply.pmavDefaultDuckMaxs.z
+        local modelMins, modelMaxs = GetStableModelBounds(ply, ply.pmavDefaultHullMins, ply.pmavDefaultHullMaxs)
+        local rule = GetRule(settings, ply:GetModel())
+        local bodyHeight = rule and rule.mode == "height" and
+            rule.height + settings.globalOffset + (rule.offset or 0) or
+            standHeight
+        local hullHeight = resizeHeight and math.Clamp(bodyHeight + 6, 18, 180) or ply.pmavDefaultHullMaxs.z
+        local duckHullHeight = resizeHeight and math.Clamp(math.min(duckHeight + 6, hullHeight), 12, 120) or ply.pmavDefaultDuckMaxs.z
         local hullMins = ply.pmavDefaultHullMins
         local duckHullMins = ply.pmavDefaultDuckMins
         local hullMaxs = Vector(ply.pmavDefaultHullMaxs.x, ply.pmavDefaultHullMaxs.y, hullHeight)
         local duckHullMaxs = Vector(ply.pmavDefaultDuckMaxs.x, ply.pmavDefaultDuckMaxs.y, duckHullHeight)
 
         if resizeWidth then
-            local modelMins, modelMaxs = ply:GetModelBounds()
-            local minX = math.min(NumberOr(modelMins.x, ply.pmavDefaultHullMins.x), -8)
-            local minY = math.min(NumberOr(modelMins.y, ply.pmavDefaultHullMins.y), -8)
-            local maxX = math.max(NumberOr(modelMaxs.x, ply.pmavDefaultHullMaxs.x), 8)
-            local maxY = math.max(NumberOr(modelMaxs.y, ply.pmavDefaultHullMaxs.y), 8)
+            local minX, minY, maxX, maxY = GetSaneHorizontalBounds(modelMins, modelMaxs, ply.pmavDefaultHullMins, ply.pmavDefaultHullMaxs)
 
             if settings.multiplayerSafe and game.MaxPlayers() > 1 and not ply:IsBot() then
                 minX = math.min(minX, ply.pmavDefaultHullMins.x)
@@ -389,14 +681,27 @@ local function CaptureEntityDefaults(ent)
 
     ent.pmavBoundsCaptured = true
     ent.pmavDefaultCollisionMins, ent.pmavDefaultCollisionMaxs = ent:GetCollisionBounds()
+
+    if not ent.pmavDefaultCollisionMins or not ent.pmavDefaultCollisionMaxs or ent.pmavDefaultCollisionMaxs:LengthSqr() <= 0.01 then
+        ent.pmavDefaultCollisionMins = Vector(-16, -16, 0)
+        ent.pmavDefaultCollisionMaxs = Vector(16, 16, 72)
+    end
 end
 
 local function RestoreEntity(ent)
-    if not IsValid(ent) or not ent.pmavBoundsCaptured then
+    if not IsValid(ent) or not ent.pmavBoundsCaptured or not ent.pmavAdaptiveBoundsApplied then
         return
     end
 
+    ent.pmavLastBoundsMins = Vector(ent.pmavDefaultCollisionMins.x, ent.pmavDefaultCollisionMins.y, ent.pmavDefaultCollisionMins.z)
+    ent.pmavLastBoundsMaxs = Vector(ent.pmavDefaultCollisionMaxs.x, ent.pmavDefaultCollisionMaxs.y, ent.pmavDefaultCollisionMaxs.z)
+    ent.pmavAdaptiveBoundsApplied = false
+    ent.pmavBlockExternalCollisionBounds = false
+
+    AV.InternalCollisionApply = true
     ent:SetCollisionBounds(ent.pmavDefaultCollisionMins, ent.pmavDefaultCollisionMaxs)
+    AV.InternalCollisionApply = false
+    BroadcastBounds(ent, ent.pmavDefaultCollisionMins, ent.pmavDefaultCollisionMaxs)
 end
 
 local function ApplyEntity(ent)
@@ -404,38 +709,90 @@ local function ApplyEntity(ent)
         return
     end
 
+    AV.ManagedEntities[ent] = true
     CaptureEntityDefaults(ent)
 
     local settings = CopySettingsForWorld(AV.SharedSettings)
+    local rule = GetRule(settings, ent:GetModel())
 
-    if not settings.enabled or not settings.collision or settings.collisionMode <= 0 then
+    if settings.collisionOnlyPlayers or not settings.npcCollision or not settings.enabled or rule and rule.mode == "off" or not settings.collision or settings.collisionMode <= 0 then
         RestoreEntity(ent)
         return
     end
 
     local resizeHeight = settings.collisionMode == 1 or settings.collisionMode == 3
     local resizeWidth = settings.collisionMode == 2 or settings.collisionMode == 3
-    local modelMins, modelMaxs = ent:GetModelBounds()
+    local modelMins, modelMaxs = GetStableModelBounds(ent, Vector(-16, -16, 0), Vector(16, 16, 72))
 
-    if not modelMins or not modelMaxs then
+    local targetHeight = GetEntityTargetHeight(ent, settings, modelMins, modelMaxs)
+
+    if not targetHeight then
+        RestoreEntity(ent)
         return
     end
 
-    local mins = Vector(ent.pmavDefaultCollisionMins.x, ent.pmavDefaultCollisionMins.y, ent.pmavDefaultCollisionMins.z)
-    local maxs = Vector(ent.pmavDefaultCollisionMaxs.x, ent.pmavDefaultCollisionMaxs.y, ent.pmavDefaultCollisionMaxs.z)
+    local mins = Vector(-16, -16, ent.pmavDefaultCollisionMins.z)
+    local maxs = Vector(16, 16, resizeHeight and math.Clamp(targetHeight + 6, 18, 180) or ent.pmavDefaultCollisionMaxs.z)
 
     if resizeWidth then
-        mins.x = NumberOr(modelMins.x, mins.x)
-        mins.y = NumberOr(modelMins.y, mins.y)
-        maxs.x = NumberOr(modelMaxs.x, maxs.x)
-        maxs.y = NumberOr(modelMaxs.y, maxs.y)
+        local minX, minY, maxX, maxY = GetSaneHorizontalBounds(modelMins, modelMaxs, ent.pmavDefaultCollisionMins, ent.pmavDefaultCollisionMaxs)
+
+        mins.x = minX
+        mins.y = minY
+        maxs.x = maxX
+        maxs.y = maxY
     end
 
-    if resizeHeight then
-        maxs.z = NumberOr(modelMaxs.z, maxs.z)
+    SetEntityCollisionBoundsStable(ent, mins, maxs)
+end
+
+local function ScheduleEntityApply(ent)
+    timer.Simple(1, function()
+        if AV.Generation ~= GENERATION then
+            return
+        end
+
+        ApplyEntity(ent)
+    end)
+end
+
+local function ScheduleAllEntitiesApply()
+    timer.Simple(0, function()
+        if AV.Generation ~= GENERATION then
+            return
+        end
+
+        for _, ent in ipairs(ents.GetAll()) do
+            ApplyEntity(ent)
+        end
+    end)
+end
+
+local function GetWorldSettingsSignature(settings)
+    settings = settings or AV.SharedSettings or SanitizeSettings({})
+    local ruleParts = {}
+
+    for model, rule in SortedPairs(settings.rules or {}) do
+        ruleParts[#ruleParts + 1] = table.concat({
+            NormalizeModel(model),
+            tostring(rule.mode or ""),
+            tostring(math.Round(NumberOr(rule.height, 0), 3)),
+            tostring(math.Round(NumberOr(rule.offset, 0), 3))
+        }, ":")
     end
 
-    ent:SetCollisionBounds(mins, maxs)
+    return table.concat({
+        settings.enabled and "1" or "0",
+        settings.collision and "1" or "0",
+        tostring(settings.collisionMode or 0),
+        settings.collisionOnlyPlayers and "1" or "0",
+        settings.npcCollision and "1" or "0",
+        tostring(settings.autoScale or 0),
+        tostring(settings.globalOffset or 0),
+        tostring(settings.minHeight or 0),
+        tostring(settings.maxHeight or 0),
+        table.concat(ruleParts, ",")
+    }, "|")
 end
 
 local function SmoothApplyPlayer(ply, fromStand, fromDuck, toStand, toDuck, settings)
@@ -452,6 +809,11 @@ local function SmoothApplyPlayer(ply, fromStand, fromDuck, toStand, toDuck, sett
     timer.Remove(timerName)
     timer.Create(timerName, 0, 0, function()
         if not IsValid(ply) then
+            timer.Remove(timerName)
+            return
+        end
+
+        if AV.Generation ~= GENERATION then
             timer.Remove(timerName)
             return
         end
@@ -480,7 +842,9 @@ net.Receive(NET_SETTINGS, function(_, ply)
     local fromStand, fromDuck = GetAppliedHeights(ply)
     AV.PlayerSettings[ply] = SanitizeSettings(net.ReadTable())
     local settings = AV.PlayerSettings[ply]
+    local oldWorldSignature = AV.WorldSettingsSignature
     AV.SharedSettings = CopySettingsForWorld(settings)
+    local newWorldSignature = GetWorldSettingsSignature(AV.SharedSettings)
     local toStand, toDuck = GetTargetHeights(ply, settings)
     local smoothing = false
 
@@ -498,33 +862,91 @@ net.Receive(NET_SETTINGS, function(_, ply)
 
     if not smoothing then
         timer.Simple(0, function()
+            if AV.Generation ~= GENERATION then
+                return
+            end
+
             ApplyPlayer(ply)
         end)
+    end
+
+    if oldWorldSignature ~= newWorldSignature then
+        AV.WorldSettingsSignature = newWorldSignature
+        ScheduleAllEntitiesApply()
     end
 end)
 
 hook.Add("OnEntityCreated", "pm_eblansky_adaptive_view_entities", function(ent)
-    timer.Simple(0, function()
-        ApplyEntity(ent)
-    end)
+    ScheduleEntityApply(ent)
+end)
 
-    timer.Simple(0.25, function()
-        ApplyEntity(ent)
-    end)
+hook.Add("EntityRemoved", "pm_eblansky_adaptive_view_entities", function(ent)
+    AV.ManagedEntities[ent] = nil
+end)
+
+hook.Add("EntityFireBullets", "pm_eblansky_adaptive_view_bullet_bounds", function(_, data)
+    if not data then
+        return
+    end
+
+    local oldCallback = data.Callback
+
+    data.Callback = function(attacker, trace, dmginfo)
+        if trace and IsValid(trace.Entity) and trace.Entity.pmavAdaptiveBoundsApplied and IsUsableDamagePoint(trace.HitPos) then
+            trace.Entity.pmavLastBulletHitPos = trace.HitPos
+            trace.Entity.pmavLastBulletHitTime = CurTime()
+
+            if not IsWorldPointInsideAdaptiveBounds(trace.Entity, trace.HitPos, 1) and dmginfo then
+                dmginfo:SetDamage(0)
+            end
+        end
+
+        if isfunction(oldCallback) then
+            return oldCallback(attacker, trace, dmginfo)
+        end
+    end
+
+    return true
+end)
+
+hook.Add("ScaleNPCDamage", "pm_eblansky_adaptive_view_damage_bounds", function(npc, _, dmginfo)
+    if ShouldBlockAdaptiveDamage(npc, dmginfo) then
+        dmginfo:SetDamage(0)
+        return true
+    end
+end)
+
+hook.Add("EntityTakeDamage", "pm_eblansky_adaptive_view_damage_bounds", function(ent, dmginfo)
+    if ShouldBlockAdaptiveDamage(ent, dmginfo) then
+        dmginfo:SetDamage(0)
+        return true
+    end
 end)
 
 hook.Add("PlayerSpawn", "pm_eblansky_adaptive_view", function(ply)
     InvalidatePlayerStableState(ply)
 
     timer.Simple(0, function()
+        if AV.Generation ~= GENERATION then
+            return
+        end
+
         ApplyPlayer(ply)
     end)
 
     timer.Simple(0.25, function()
+        if AV.Generation ~= GENERATION then
+            return
+        end
+
         ApplyPlayer(ply)
     end)
 
     timer.Simple(1, function()
+        if AV.Generation ~= GENERATION then
+            return
+        end
+
         ApplyPlayer(ply)
     end)
 end)
@@ -533,14 +955,26 @@ hook.Add("PlayerSetModel", "pm_eblansky_adaptive_view", function(ply)
     InvalidatePlayerStableState(ply)
 
     timer.Simple(0, function()
+        if AV.Generation ~= GENERATION then
+            return
+        end
+
         ApplyPlayer(ply)
     end)
 
     timer.Simple(0.25, function()
+        if AV.Generation ~= GENERATION then
+            return
+        end
+
         ApplyPlayer(ply)
     end)
 
     timer.Simple(1, function()
+        if AV.Generation ~= GENERATION then
+            return
+        end
+
         ApplyPlayer(ply)
     end)
 end)
@@ -551,16 +985,4 @@ end)
 
 hook.Add("PlayerDisconnected", "pm_eblansky_adaptive_view", function(ply)
     AV.PlayerSettings[ply] = nil
-end)
-
-timer.Create("pm_eblansky_adaptive_view_world_entities", 1, 0, function()
-    for _, ply in ipairs(player.GetAll()) do
-        if ply:Alive() then
-            ApplyPlayer(ply)
-        end
-    end
-
-    for _, ent in ipairs(ents.GetAll()) do
-        ApplyEntity(ent)
-    end
 end)

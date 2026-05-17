@@ -14,15 +14,11 @@ local cvMaxHeight = CreateClientConVar("pmav_max_height", "120", true, false, "M
 local cvCollision = CreateClientConVar("pmav_collision", "1", true, false, "Resize player collision hull with adaptive height.")
 local cvCollisionMode = CreateClientConVar("pmav_collision_mode", "3", true, false, "Adaptive collision mode: 0 none, 1 height, 2 width/length, 3 all.")
 local cvCollisionRadius = CreateClientConVar("pmav_collision_radius", "16", true, false, "Adaptive player collision hull half-width.")
-local cvCollisionOnlyPlayers = CreateClientConVar("pmav_collision_only_players", "0", true, false, "Apply Adaptive View collision only to players.")
-local cvNpcCollision = CreateClientConVar("pmav_npc_collision", "1", true, false, "Apply Adaptive View collision to NPCs and NextBots.")
 local cvMultiplayerSafe = CreateClientConVar("pmav_multiplayer_safe", "1", true, false, "Avoid shrinking player width/length in multiplayer.")
-local cvDebugBounds = CreateClientConVar("pmav_debug_bounds", "0", true, false, "Draw Adaptive View debug collision bounds.")
 
 AV.ModelRules = AV.ModelRules or {}
 AV.SmoothedOffset = AV.SmoothedOffset or 0
 AV.LastViewOffset = AV.LastViewOffset or vector_origin
-AV.ServerBounds = {}
 
 local function NormalizeModel(model)
     return string.lower(string.Trim(tostring(model or "")))
@@ -257,10 +253,7 @@ local function ResetSettingsExceptRules()
     RunConsoleCommand("pmav_collision", "1")
     RunConsoleCommand("pmav_collision_mode", "3")
     RunConsoleCommand("pmav_collision_radius", "16")
-    RunConsoleCommand("pmav_collision_only_players", "0")
-    RunConsoleCommand("pmav_npc_collision", "1")
     RunConsoleCommand("pmav_multiplayer_safe", "1")
-    RunConsoleCommand("pmav_debug_bounds", "0")
     AV.SmoothedOffset = 0
     AV.LastViewOffset = vector_origin
 
@@ -516,9 +509,6 @@ local function AddAdaptiveViewMenu()
         panel:ClearControls()
         panel:CheckBox("Enable adaptive camera", "pmav_enabled")
         panel:CheckBox("Adapt collision", "pmav_collision")
-        panel:CheckBox("Adapt NPC/NextBot collision (experimental)", "pmav_npc_collision")
-        panel:CheckBox("Collision only players", "pmav_collision_only_players")
-        panel:CheckBox("Draw debug bounds", "pmav_debug_bounds")
 
         local collisionMode = vgui.Create("DComboBox")
         collisionMode:AddChoice("Nothing", "0")
@@ -661,6 +651,43 @@ end
 
 hook.Add("PopulateToolMenu", "pm_eblansky_adaptive_view_menu", AddAdaptiveViewMenu)
 
+local function ApplyLocalViewPrediction()
+    local ply = LocalPlayer()
+
+    if not IsValid(ply) or not ply:Alive() then
+        return
+    end
+
+    local rule = AV.GetRule(ply:GetModel())
+
+    if not cvEnabled:GetBool() or rule and rule.mode == "off" then
+        return
+    end
+
+    local standHeight = rule and rule.mode == "height" and rule.height or AV.GetLocalAutoHeight()
+
+    if not standHeight or standHeight <= 0 then
+        return
+    end
+
+    standHeight = standHeight + cvGlobalOffset:GetFloat() + (rule and rule.offset or 0)
+    standHeight = math.Clamp(standHeight, cvMinHeight:GetFloat(), cvMaxHeight:GetFloat())
+
+    local duckHeight = math.max(standHeight * 0.4375, 18)
+    local standOffset = Vector(0, 0, standHeight)
+    local duckOffset = Vector(0, 0, duckHeight)
+
+    if not AV.LastPredictedStand or math.abs(AV.LastPredictedStand - standHeight) > 0.01 or math.abs(ply:GetViewOffset().z - standHeight) > 0.01 then
+        AV.LastPredictedStand = standHeight
+        ply:SetViewOffset(standOffset)
+    end
+
+    if not AV.LastPredictedDuck or math.abs(AV.LastPredictedDuck - duckHeight) > 0.01 or math.abs(ply:GetViewOffsetDucked().z - duckHeight) > 0.01 then
+        AV.LastPredictedDuck = duckHeight
+        ply:SetViewOffsetDucked(duckOffset)
+    end
+end
+
 local function SyncSettingsSoon()
     if not isfunction(AV.SyncSettingsToServer) then
         return
@@ -679,8 +706,6 @@ for _, convarName in ipairs({
     "pmav_collision",
     "pmav_collision_mode",
     "pmav_collision_radius",
-    "pmav_collision_only_players",
-    "pmav_npc_collision",
     "pmav_multiplayer_safe"
 }) do
     cvars.AddChangeCallback(convarName, SyncSettingsSoon, "pm_eblansky_adaptive_view")
@@ -712,7 +737,8 @@ timer.Create("pm_eblansky_adaptive_view_model_watch", 0.5, 0, function()
 
     AV.LastAliveState = alive
 
-    local state = model .. "|" .. tostring(alive)
+    local height = math.Round(AV.GetLocalAutoHeight and AV.GetLocalAutoHeight() or 0, 2)
+    local state = model .. "|" .. tostring(alive) .. "|" .. tostring(height)
 
     if AV.LastSyncedState == state then
         return
@@ -723,114 +749,15 @@ timer.Create("pm_eblansky_adaptive_view_model_watch", 0.5, 0, function()
     timer.Simple(0.25, SyncSettingsSoon)
 end)
 
-hook.Remove("Think", "pm_eblansky_adaptive_view_prediction")
+timer.Create("pm_eblansky_adaptive_view_periodic_sync", 2, 0, function()
+    local ply = LocalPlayer()
 
-net.Receive("pmav_bounds", function()
-    local ent = net.ReadEntity()
-    local mins = net.ReadVector()
-    local maxs = net.ReadVector()
-    local hasDuck = net.ReadBool()
-    local duckMins
-    local duckMaxs
-
-    if hasDuck then
-        duckMins = net.ReadVector()
-        duckMaxs = net.ReadVector()
-    end
-
-    if IsValid(ent) then
-        AV.ServerBounds[ent] = {
-            mins = mins,
-            maxs = maxs,
-            duckMins = duckMins,
-            duckMaxs = duckMaxs,
-            time = CurTime()
-        }
+    if IsValid(ply) and ply:Alive() then
+        SyncSettingsSoon()
     end
 end)
 
-local function ShouldDrawDebugBounds(ent)
-    if not IsValid(ent) or ent:IsWeapon() then
-        return false
-    end
-
-    local class = string.lower(ent:GetClass() or "")
-
-    if string.find(class, "prop_", 1, true) or string.find(class, "ragdoll", 1, true) then
-        return false
-    end
-
-    if ent:IsPlayer() or ent:IsNPC() then
-        if cvCollisionOnlyPlayers:GetBool() and not ent:IsPlayer() then
-            return false
-        end
-
-        return true
-    end
-
-    if isfunction(ent.IsNextBot) and ent:IsNextBot() then
-        if cvCollisionOnlyPlayers:GetBool() then
-            return false
-        end
-
-        return true
-    end
-
-    if cvCollisionOnlyPlayers:GetBool() then
-        return false
-    end
-
-    return string.find(class, "npc", 1, true) ~= nil or string.find(class, "nextbot", 1, true) ~= nil
-end
-
-local function DrawDebugBounds()
-    if not cvDebugBounds:GetBool() then
-        return
-    end
-
-    render.SetColorMaterial()
-
-    for _, ent in ipairs(ents.GetAll()) do
-        if ShouldDrawDebugBounds(ent) then
-            local mins, maxs
-
-            local serverBounds = AV.ServerBounds[ent]
-
-            if serverBounds then
-                if ent:IsPlayer() and ent:Crouching() and serverBounds.duckMins and serverBounds.duckMaxs then
-                    mins = serverBounds.duckMins
-                    maxs = serverBounds.duckMaxs
-                else
-                    mins = serverBounds.mins
-                    maxs = serverBounds.maxs
-                end
-
-            elseif ent:IsPlayer() and isfunction(ent.GetHull) then
-                if ent:Crouching() and isfunction(ent.GetHullDuck) then
-                    mins, maxs = ent:GetHullDuck()
-                else
-                    mins, maxs = ent:GetHull()
-                end
-            else
-                mins, maxs = nil, nil
-            end
-
-            if mins and maxs then
-                local color = Color(80, 220, 255, 255)
-
-                if ent:IsNPC() or isfunction(ent.IsNextBot) and ent:IsNextBot() then
-                    color = Color(255, 180, 80, 255)
-                elseif ent:IsPlayer() and ent:IsBot() then
-                    color = Color(180, 120, 255, 255)
-                end
-
-                render.DrawWireframeBox(ent:GetPos(), Angle(0, 0, 0), mins, maxs, color, true)
-            end
-        end
-    end
-end
-
-hook.Add("PostDrawTranslucentRenderables", "pm_eblansky_adaptive_view_debug_bounds", DrawDebugBounds)
+hook.Add("Think", "pm_eblansky_adaptive_view_prediction", ApplyLocalViewPrediction)
 
 timer.Simple(0.1, SyncSettingsSoon)
 timer.Simple(1, SyncSettingsSoon)

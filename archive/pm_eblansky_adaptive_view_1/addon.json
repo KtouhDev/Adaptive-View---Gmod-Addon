@@ -7,8 +7,6 @@
   ],
   "ignore": [
               ".git/",
-              ".psd",
-              "*.gma",
-              "*.md"
+              ".psd"  
             ]
 }
