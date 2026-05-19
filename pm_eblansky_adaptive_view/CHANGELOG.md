@@ -1,5 +1,32 @@
 # Changelog
 
+## 2026-05-20
+
+- Added multiplayer permission hardening for Adaptive View settings.
+- Added `pmav_alladmins` to optionally allow non-admin players to edit settings.
+- Added `pmav_injail` to lock the settings menu for everyone, including admins.
+- Restricted non-admin Q-menu access to the `Thank them!` credits button unless server settings allow editing.
+- Blocked client-side settings net messages from unauthorized players on the server.
+- Disabled debug bounds in multiplayer and stopped debug bounds networking outside singleplayer.
+- Updated debug behavior so `pmav_injail` also blocks debug rendering in singleplayer.
+- Added a stuck watchdog that can move players out of solid geometry after adaptive hull changes.
+- Improved stuck checks so non-solid/passable props are ignored.
+- Started planning the multiplayer server-side config/rules model for per-server model rules.
+- Added a compatibility note for planned VR support and future VR-specific camera/collision handling.
+
+## 2026-05-19
+
+- Renamed the main Q-menu toggle to `Enable add-on`; disabling it now stops the add-on logic and restores player state.
+- Expanded per-model rules with separate camera height, camera offset, hitbox height, hitbox width, and hitbox length controls.
+- Kept the rule editor open after saving so values can be tuned live.
+- Added auto collision aspect locking for generated width/length values.
+- Fixed `Hitbox height = 0` so it means automatic collision height instead of inheriting camera rule height.
+- Improved player auto collision sizing by using body/bone-based width estimates instead of raw model bounds where possible.
+- Added optional walk/run speed scaling and jump-power scaling from adaptive hitbox height.
+- Added `Thank them!` credits window with clickable Steam profile links.
+- Improved reload behavior so players and existing adaptive entities are recalculated after script/settings reloads.
+- Continued NPC/NextBot/Lambda/Zeta collision handling improvements without enabling constant live recalculation.
+
 ## 2026-05-18
 
 - Updated adaptive collision handling for players, bots, NPCs, and NextBots.

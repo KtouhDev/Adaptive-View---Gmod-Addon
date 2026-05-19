@@ -4,9 +4,8 @@ PM_EBLANSKY_ADAPTIVE_VIEW = PM_EBLANSKY_ADAPTIVE_VIEW or {}
 
 local AV = PM_EBLANSKY_ADAPTIVE_VIEW
 local DATA_FILE = "pm_eblansky_adaptive_view/models.json"
-local OpenThanksWindow
 
-local cvEnabled = CreateClientConVar("pmav_enabled", "1", true, false, "Enable Adaptive View add-on logic.")
+local cvEnabled = CreateClientConVar("pmav_enabled", "1", true, false, "Enable adaptive camera height.")
 local cvAutoScale = CreateClientConVar("pmav_auto_scale", "0.92", true, false, "Part of model height used as eye height.")
 local cvGlobalOffset = CreateClientConVar("pmav_global_offset", "0", true, false, "Global camera height offset.")
 local cvSmooth = CreateClientConVar("pmav_smooth", "10", true, false, "Hidden option-switch smoothing speed.")
@@ -18,8 +17,6 @@ local cvCollisionRadius = CreateClientConVar("pmav_collision_radius", "16", true
 local cvCollisionOnlyPlayers = CreateClientConVar("pmav_collision_only_players", "0", true, false, "Apply Adaptive View collision only to players.")
 local cvNpcCollision = CreateClientConVar("pmav_npc_collision", "1", true, false, "Apply Adaptive View collision to NPCs and NextBots.")
 local cvMultiplayerSafe = CreateClientConVar("pmav_multiplayer_safe", "1", true, false, "Avoid shrinking player width/length in multiplayer.")
-local cvAdaptiveSpeed = CreateClientConVar("pmav_adaptive_speed", "0", true, false, "Scale walk/run speed from adaptive hitbox height.")
-local cvAdaptiveJump = CreateClientConVar("pmav_adaptive_jump", "0", true, false, "Scale jump power from adaptive hitbox height.")
 local cvDebugBounds = CreateClientConVar("pmav_debug_bounds", "0", true, false, "Draw Adaptive View debug collision bounds.")
 
 AV.ModelRules = AV.ModelRules or {}
@@ -41,81 +38,6 @@ local function NumberOr(value, fallback)
     return value
 end
 
-local function ClassLooksAdaptive(class)
-    class = string.lower(tostring(class or ""))
-
-    return string.find(class, "npc", 1, true) ~= nil or
-        string.find(class, "nextbot", 1, true) ~= nil or
-        string.find(class, "lambda", 1, true) ~= nil or
-        string.find(class, "zeta", 1, true) ~= nil or
-        string.find(class, "drg", 1, true) ~= nil
-end
-
-local function NormalizeRule(rule)
-    if not istable(rule) then
-        return nil
-    end
-
-    local mode = tostring(rule.mode or "auto")
-
-    if mode ~= "auto" and mode ~= "height" and mode ~= "off" then
-        mode = "auto"
-    end
-
-    return {
-        mode = mode,
-        height = NumberOr(rule.height, 64),
-        offset = NumberOr(rule.offset, 0),
-        cameraOffset = NumberOr(rule.cameraOffset, NumberOr(rule.offset, 0)),
-        collisionHeight = NumberOr(rule.collisionHeight, 0),
-        collisionWidth = NumberOr(rule.collisionWidth, 0),
-        collisionLength = NumberOr(rule.collisionLength, 0)
-    }
-end
-
-local function CanLocalEditSettings()
-    local inJail = GetConVar("pmav_injail")
-
-    if inJail and inJail:GetBool() then
-        return false
-    end
-
-    local ply = LocalPlayer()
-
-    if game.SinglePlayer() then
-        return true
-    end
-
-    if IsValid(ply) and isfunction(ply.IsAdmin) and ply:IsAdmin() then
-        return true
-    end
-
-    local cheats = GetConVar("sv_cheats")
-
-    if cheats and cheats:GetBool() then
-        return true
-    end
-
-    local allowAll = GetConVar("pmav_alladmins")
-
-    return allowAll and allowAll:GetBool() or false
-end
-
-local function CanUseDebugBounds()
-    local inJail = GetConVar("pmav_injail")
-
-    if inJail and inJail:GetBool() then
-        return false
-    end
-
-    return game.SinglePlayer()
-end
-
-local function AddThanksOnly(panel)
-    local thanksButton = panel:Button("Thank them!")
-    thanksButton.DoClick = OpenThanksWindow
-end
-
 local function ReadRules()
     AV.ModelRules = {}
 
@@ -132,11 +54,15 @@ local function ReadRules()
     for model, rule in pairs(decoded) do
         model = NormalizeModel(model)
 
-        if model ~= "" then
-            local normalizedRule = NormalizeRule(rule)
+        if model ~= "" and istable(rule) then
+            local mode = tostring(rule.mode or "auto")
 
-            if normalizedRule then
-                AV.ModelRules[model] = normalizedRule
+            if mode == "auto" or mode == "height" or mode == "off" then
+                AV.ModelRules[model] = {
+                    mode = mode,
+                    height = NumberOr(rule.height, 64),
+                    offset = NumberOr(rule.offset, 0)
+                }
             end
         end
     end
@@ -149,15 +75,11 @@ end
 
 ReadRules()
 
-if not CanUseDebugBounds() and cvDebugBounds:GetBool() then
-    RunConsoleCommand("pmav_debug_bounds", "0")
-end
-
 function AV.GetRule(model)
     return AV.ModelRules[NormalizeModel(model)]
 end
 
-function AV.SetRule(model, mode, height, offset, cameraOffset, collisionHeight, collisionWidth, collisionLength)
+function AV.SetRule(model, mode, height, offset)
     model = NormalizeModel(model)
 
     if model == "" then
@@ -167,15 +89,11 @@ function AV.SetRule(model, mode, height, offset, cameraOffset, collisionHeight, 
     if mode == nil then
         AV.ModelRules[model] = nil
     else
-        AV.ModelRules[model] = NormalizeRule({
+        AV.ModelRules[model] = {
             mode = mode,
             height = NumberOr(height, 64),
-            offset = NumberOr(offset, NumberOr(cameraOffset, 0)),
-            cameraOffset = NumberOr(cameraOffset, NumberOr(offset, 0)),
-            collisionHeight = NumberOr(collisionHeight, 0),
-            collisionWidth = NumberOr(collisionWidth, 0),
-            collisionLength = NumberOr(collisionLength, 0)
-        })
+            offset = NumberOr(offset, 0)
+        }
     end
 
     WriteRules()
@@ -315,7 +233,7 @@ local function GetTargetHeight(ply, duckAmount)
         standingHeight, followsPose = GetModelAutoHeight(ply)
     end
 
-    standingHeight = standingHeight + cvGlobalOffset:GetFloat() + (rule and rule.cameraOffset or rule and rule.offset or 0)
+    standingHeight = standingHeight + cvGlobalOffset:GetFloat() + (rule and rule.offset or 0)
 
     if followsPose then
         return standingHeight
@@ -342,8 +260,6 @@ local function ResetSettingsExceptRules()
     RunConsoleCommand("pmav_collision_only_players", "0")
     RunConsoleCommand("pmav_npc_collision", "1")
     RunConsoleCommand("pmav_multiplayer_safe", "1")
-    RunConsoleCommand("pmav_adaptive_speed", "0")
-    RunConsoleCommand("pmav_adaptive_jump", "0")
     RunConsoleCommand("pmav_debug_bounds", "0")
     AV.SmoothedOffset = 0
     AV.LastViewOffset = vector_origin
@@ -358,12 +274,7 @@ local function FillRulesList(list)
 
     for model, rule in SortedPairs(AV.ModelRules) do
         local height = rule.mode == "height" and tostring(math.Round(rule.height, 2)) or "-"
-        local cameraOffset = tostring(math.Round(rule.cameraOffset or rule.offset or 0, 2))
-        local collisionHeight = rule.collisionHeight and rule.collisionHeight > 0 and tostring(math.Round(rule.collisionHeight, 2)) or "auto"
-        local collisionWidth = rule.collisionWidth and rule.collisionWidth > 0 and tostring(math.Round(rule.collisionWidth, 2)) or "auto"
-        local collisionLength = rule.collisionLength and rule.collisionLength > 0 and tostring(math.Round(rule.collisionLength, 2)) or "auto"
-
-        list:AddLine(model, rule.mode, height, cameraOffset, collisionHeight, collisionWidth, collisionLength)
+        list:AddLine(model, rule.mode, height, tostring(math.Round(rule.offset or 0, 2)))
     end
 end
 
@@ -518,16 +429,12 @@ local function OpenRuleEditor(oldModel, onSaved)
     local rule = table.Copy(AV.GetRule(oldModel) or {
         mode = "auto",
         height = 64,
-        offset = 0,
-        cameraOffset = 0,
-        collisionHeight = 0,
-        collisionWidth = 0,
-        collisionLength = 0
+        offset = 0
     })
 
     local frame = vgui.Create("DFrame")
-    frame:SetTitle("Edit model rule (An improved version of this menu is under development)")
-    frame:SetSize(460, 400)
+    frame:SetTitle("Edit model rule")
+    frame:SetSize(420, 260)
     frame:Center()
     frame:MakePopup()
 
@@ -555,7 +462,7 @@ local function OpenRuleEditor(oldModel, onSaved)
     local heightSlider = vgui.Create("DNumSlider", frame)
     heightSlider:Dock(TOP)
     heightSlider:DockMargin(8, 0, 8, 0)
-    heightSlider:SetText("Camera exact height")
+    heightSlider:SetText("Exact standing height")
     heightSlider:SetMinMax(20, 120)
     heightSlider:SetDecimals(0)
     heightSlider:SetValue(rule.height or 64)
@@ -563,34 +470,10 @@ local function OpenRuleEditor(oldModel, onSaved)
     local offsetSlider = vgui.Create("DNumSlider", frame)
     offsetSlider:Dock(TOP)
     offsetSlider:DockMargin(8, 0, 8, 0)
-    offsetSlider:SetText("Camera offset")
+    offsetSlider:SetText("Model offset")
     offsetSlider:SetMinMax(-32, 32)
     offsetSlider:SetDecimals(1)
-    offsetSlider:SetValue(rule.cameraOffset or rule.offset or 0)
-
-    local collisionHeightSlider = vgui.Create("DNumSlider", frame)
-    collisionHeightSlider:Dock(TOP)
-    collisionHeightSlider:DockMargin(8, 0, 8, 0)
-    collisionHeightSlider:SetText("Hitbox height (0 = auto)")
-    collisionHeightSlider:SetMinMax(0, 180)
-    collisionHeightSlider:SetDecimals(0)
-    collisionHeightSlider:SetValue(rule.collisionHeight or 0)
-
-    local collisionWidthSlider = vgui.Create("DNumSlider", frame)
-    collisionWidthSlider:Dock(TOP)
-    collisionWidthSlider:DockMargin(8, 0, 8, 0)
-    collisionWidthSlider:SetText("Hitbox width (0 = auto)")
-    collisionWidthSlider:SetMinMax(0, 96)
-    collisionWidthSlider:SetDecimals(0)
-    collisionWidthSlider:SetValue(rule.collisionWidth or 0)
-
-    local collisionLengthSlider = vgui.Create("DNumSlider", frame)
-    collisionLengthSlider:Dock(TOP)
-    collisionLengthSlider:DockMargin(8, 0, 8, 0)
-    collisionLengthSlider:SetText("Hitbox length (0 = auto)")
-    collisionLengthSlider:SetMinMax(0, 96)
-    collisionLengthSlider:SetDecimals(0)
-    collisionLengthSlider:SetValue(rule.collisionLength or 0)
+    offsetSlider:SetValue(rule.offset or 0)
 
     local saveButton = vgui.Create("DButton", frame)
     saveButton:Dock(BOTTOM)
@@ -618,111 +501,24 @@ local function OpenRuleEditor(oldModel, onSaved)
             AV.SetRule(oldModel, nil)
         end
 
-        AV.SetRule(
-            newModel,
-            mode,
-            heightSlider:GetValue(),
-            offsetSlider:GetValue(),
-            offsetSlider:GetValue(),
-            collisionHeightSlider:GetValue(),
-            collisionWidthSlider:GetValue(),
-            collisionLengthSlider:GetValue()
-        )
+        AV.SetRule(newModel, mode, heightSlider:GetValue(), offsetSlider:GetValue())
 
         if isfunction(onSaved) then
-            onSaved(newModel, mode, heightSlider:GetValue(), offsetSlider:GetValue(), collisionHeightSlider:GetValue(), collisionWidthSlider:GetValue(), collisionLengthSlider:GetValue())
+            onSaved(newModel, mode, heightSlider:GetValue(), offsetSlider:GetValue())
         end
 
-        oldModel = newModel
-        saveButton:SetText("Saved")
-
-        timer.Simple(0.8, function()
-            if IsValid(saveButton) then
-                saveButton:SetText("Save rule")
-            end
-        end)
+        frame:Close()
     end
-end
-
-function OpenThanksWindow()
-    local frame = vgui.Create("DFrame")
-    frame:SetTitle("Adaptive View - Thank them!")
-    frame:SetSize(540, 270)
-    frame:Center()
-    frame:MakePopup()
-
-    local text = vgui.Create("RichText", frame)
-    text:Dock(FILL)
-    text:DockMargin(10, 8, 10, 10)
-
-    text:InsertColorChange(80, 180, 255, 255)
-    text:AppendText("Adaptive View credits\n\n")
-    text:InsertColorChange(235, 235, 235, 255)
-    text:AppendText("Дочь казаха — Programming\n\n")
-    text:AppendText("TotallyARussian — For the idea of adding a width change, and separating the overview from the Box. ")
-    text:InsertColorChange(180, 180, 180, 255)
-    text:AppendText("(It's there now, but it's not implemented properly, this feature will manifest itself in the Rule menu update)\n\n")
-    text:InsertColorChange(235, 235, 235, 255)
-    text:AppendText("TheRyleeFella — Finding a bug related to grenades from ARC Escape From Tarkov.\n")
-end
-
-function OpenThanksWindow()
-    local frame = vgui.Create("DFrame")
-    frame:SetTitle("Adaptive View - Thank them!")
-    frame:SetSize(620, 300)
-    frame:Center()
-    frame:MakePopup()
-
-    local text = vgui.Create("RichText", frame)
-    text:Dock(FILL)
-    text:DockMargin(10, 8, 10, 10)
-
-    local function addName(name, url)
-        if url and url ~= "" and isfunction(text.InsertClickableTextStart) then
-            text:InsertClickableTextStart(url)
-            text:AppendText(name)
-            text:InsertClickableTextEnd()
-            return
-        end
-
-        text:AppendText(name)
-    end
-
-    local function addCredit(name, role, url)
-        text:InsertColorChange(120, 200, 255, 255)
-        addName(name, url)
-        text:InsertColorChange(235, 235, 235, 255)
-        text:AppendText(" - " .. role .. "\n\n")
-    end
-
-    text:InsertColorChange(80, 180, 255, 255)
-    text:AppendText("Adaptive View credits\n\n")
-    addCredit("Doch kazaha", "Programming", "https://steamcommunity.com/profiles/76561199492270733")
-    addCredit("TotallyARussian", "For the idea of adding a width change, and separating the overview from the Box. (It's there now, but it's not implemented properly, this feature will manifest itself in the Rule menu update)", "https://steamcommunity.com/id/xXxedgemasterxXx")
-    addCredit("TheRyleeFella", "Finding a bug related to grenades from ARC Escape From Tarkov.", "https://steamcommunity.com/profiles/76561199199788875")
 end
 
 local function AddAdaptiveViewMenu()
     spawnmenu.AddToolMenuOption("Options", "Player", "pm_eblansky_adaptive_view", "Adaptive View", "", "", function(panel)
         panel:ClearControls()
-
-        if not CanLocalEditSettings() then
-            AddThanksOnly(panel)
-            return
-        end
-
-        panel:CheckBox("Enable add-on", "pmav_enabled")
+        panel:CheckBox("Enable adaptive camera", "pmav_enabled")
         panel:CheckBox("Adapt collision", "pmav_collision")
         panel:CheckBox("Adapt NPC/NextBot collision (experimental)", "pmav_npc_collision")
         panel:CheckBox("Collision only players", "pmav_collision_only_players")
-        panel:CheckBox("Adapt speed to hitbox height", "pmav_adaptive_speed")
-        panel:CheckBox("Adapt jump to hitbox height", "pmav_adaptive_jump")
-        if CanUseDebugBounds() then
-            panel:CheckBox("Draw debug bounds", "pmav_debug_bounds")
-        end
-
-        local thanksButton = panel:Button("Thank them!")
-        thanksButton.DoClick = OpenThanksWindow
+        panel:CheckBox("Draw debug bounds", "pmav_debug_bounds")
 
         local collisionMode = vgui.Create("DComboBox")
         collisionMode:AddChoice("Nothing", "0")
@@ -749,39 +545,18 @@ local function AddAdaptiveViewMenu()
         panel:AddItem(modelEntry)
 
         local heightSlider = vgui.Create("DNumSlider")
-        heightSlider:SetText("Camera exact height")
+        heightSlider:SetText("Exact standing height")
         heightSlider:SetMinMax(20, 120)
         heightSlider:SetDecimals(0)
         heightSlider:SetValue(64)
         panel:AddItem(heightSlider)
 
         local offsetSlider = vgui.Create("DNumSlider")
-        offsetSlider:SetText("Camera offset")
+        offsetSlider:SetText("Model offset")
         offsetSlider:SetMinMax(-32, 32)
         offsetSlider:SetDecimals(1)
         offsetSlider:SetValue(0)
         panel:AddItem(offsetSlider)
-
-        local collisionHeightSlider = vgui.Create("DNumSlider")
-        collisionHeightSlider:SetText("Hitbox height (0 = auto)")
-        collisionHeightSlider:SetMinMax(0, 180)
-        collisionHeightSlider:SetDecimals(0)
-        collisionHeightSlider:SetValue(0)
-        panel:AddItem(collisionHeightSlider)
-
-        local collisionWidthSlider = vgui.Create("DNumSlider")
-        collisionWidthSlider:SetText("Hitbox width (0 = auto)")
-        collisionWidthSlider:SetMinMax(0, 96)
-        collisionWidthSlider:SetDecimals(0)
-        collisionWidthSlider:SetValue(0)
-        panel:AddItem(collisionWidthSlider)
-
-        local collisionLengthSlider = vgui.Create("DNumSlider")
-        collisionLengthSlider:SetText("Hitbox length (0 = auto)")
-        collisionLengthSlider:SetMinMax(0, 96)
-        collisionLengthSlider:SetDecimals(0)
-        collisionLengthSlider:SetValue(0)
-        panel:AddItem(collisionLengthSlider)
 
         local modeBox = vgui.Create("DComboBox")
         modeBox:AddChoice("Auto height", "auto", true)
@@ -793,11 +568,8 @@ local function AddAdaptiveViewMenu()
         list:SetTall(180)
         list:AddColumn("Model")
         list:AddColumn("Mode")
-        list:AddColumn("Cam height")
-        list:AddColumn("Cam offset")
-        list:AddColumn("HB height")
-        list:AddColumn("HB width")
-        list:AddColumn("HB length")
+        list:AddColumn("Height")
+        list:AddColumn("Offset")
         panel:AddItem(list)
 
         local function getSelectedRule()
@@ -816,16 +588,7 @@ local function AddAdaptiveViewMenu()
         local function saveRuleForModel(model)
             local selectedID = modeBox:GetSelectedID() or 1
             local mode = modeBox:GetOptionData(selectedID)
-            AV.SetRule(
-                model,
-                mode or "auto",
-                heightSlider:GetValue(),
-                offsetSlider:GetValue(),
-                offsetSlider:GetValue(),
-                collisionHeightSlider:GetValue(),
-                collisionWidthSlider:GetValue(),
-                collisionLengthSlider:GetValue()
-            )
+            AV.SetRule(model, mode or "auto", heightSlider:GetValue(), offsetSlider:GetValue())
             FillRulesList(list)
         end
 
@@ -838,10 +601,7 @@ local function AddAdaptiveViewMenu()
             if rule then
                 modeBox:ChooseOptionID(rule.mode == "height" and 2 or rule.mode == "off" and 3 or 1)
                 heightSlider:SetValue(rule.height or 64)
-                offsetSlider:SetValue(rule.cameraOffset or rule.offset or 0)
-                collisionHeightSlider:SetValue(rule.collisionHeight or 0)
-                collisionWidthSlider:SetValue(rule.collisionWidth or 0)
-                collisionLengthSlider:SetValue(rule.collisionLength or 0)
+                offsetSlider:SetValue(rule.offset or 0)
             end
         end
 
@@ -859,14 +619,11 @@ local function AddAdaptiveViewMenu()
         end
 
         list.DoDoubleClick = function(_, _, row)
-            OpenRuleEditor(row:GetColumnText(1), function(newModel, mode, height, offset, collisionHeight, collisionWidth, collisionLength)
+            OpenRuleEditor(row:GetColumnText(1), function(newModel, mode, height, offset)
                 modelEntry:SetText(newModel)
                 modeBox:ChooseOptionID(mode == "height" and 2 or mode == "off" and 3 or 1)
                 heightSlider:SetValue(height or 64)
                 offsetSlider:SetValue(offset or 0)
-                collisionHeightSlider:SetValue(collisionHeight or 0)
-                collisionWidthSlider:SetValue(collisionWidth or 0)
-                collisionLengthSlider:SetValue(collisionLength or 0)
                 FillRulesList(list)
             end)
         end
@@ -905,15 +662,7 @@ end
 hook.Add("PopulateToolMenu", "pm_eblansky_adaptive_view_menu", AddAdaptiveViewMenu)
 
 local function SyncSettingsSoon()
-    if not CanUseDebugBounds() and cvDebugBounds:GetBool() then
-        RunConsoleCommand("pmav_debug_bounds", "0")
-    end
-
     if not isfunction(AV.SyncSettingsToServer) then
-        return
-    end
-
-    if not CanLocalEditSettings() then
         return
     end
 
@@ -932,12 +681,7 @@ for _, convarName in ipairs({
     "pmav_collision_radius",
     "pmav_collision_only_players",
     "pmav_npc_collision",
-    "pmav_multiplayer_safe",
-    "pmav_adaptive_speed",
-    "pmav_adaptive_jump",
-    "pmav_alladmins",
-    "pmav_injail",
-    "pmav_debug_mp"
+    "pmav_multiplayer_safe"
 }) do
     cvars.AddChangeCallback(convarName, SyncSettingsSoon, "pm_eblansky_adaptive_view")
 end
@@ -1036,11 +780,11 @@ local function ShouldDrawDebugBounds(ent)
         return false
     end
 
-    return ClassLooksAdaptive(class)
+    return string.find(class, "npc", 1, true) ~= nil or string.find(class, "nextbot", 1, true) ~= nil
 end
 
 local function DrawDebugBounds()
-    if not cvEnabled:GetBool() or not cvDebugBounds:GetBool() or not CanUseDebugBounds() then
+    if not cvDebugBounds:GetBool() then
         return
     end
 
@@ -1074,7 +818,7 @@ local function DrawDebugBounds()
             if mins and maxs then
                 local color = Color(80, 220, 255, 255)
 
-                if ent:IsNPC() or isfunction(ent.IsNextBot) and ent:IsNextBot() or ClassLooksAdaptive(ent:GetClass()) then
+                if ent:IsNPC() or isfunction(ent.IsNextBot) and ent:IsNextBot() then
                     color = Color(255, 180, 80, 255)
                 elseif ent:IsPlayer() and ent:IsBot() then
                     color = Color(180, 120, 255, 255)
