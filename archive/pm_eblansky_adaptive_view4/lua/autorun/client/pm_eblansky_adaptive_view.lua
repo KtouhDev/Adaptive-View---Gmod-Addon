@@ -69,9 +69,7 @@ local function NormalizeRule(rule)
         cameraOffset = NumberOr(rule.cameraOffset, NumberOr(rule.offset, 0)),
         collisionHeight = NumberOr(rule.collisionHeight, 0),
         collisionWidth = NumberOr(rule.collisionWidth, 0),
-        collisionLength = NumberOr(rule.collisionLength, 0),
-        speed = NumberOr(rule.speed, -1),
-        jump = NumberOr(rule.jump, -1)
+        collisionLength = NumberOr(rule.collisionLength, 0)
     }
 end
 
@@ -149,56 +147,6 @@ local function WriteRules()
     file.Write(DATA_FILE, util.TableToJSON(AV.ModelRules, true))
 end
 
-local function ReadSavedRule(model)
-    model = NormalizeModel(model)
-
-    if model == "" or not file.Exists(DATA_FILE, "DATA") then
-        return nil
-    end
-
-    local decoded = util.JSONToTable(file.Read(DATA_FILE, "DATA") or "")
-
-    if not istable(decoded) then
-        return nil
-    end
-
-    for savedModel, rule in pairs(decoded) do
-        if NormalizeModel(savedModel) == model then
-            return NormalizeRule(rule)
-        end
-    end
-
-    return nil
-end
-
-local function DefaultRule()
-    return {
-        mode = "auto",
-        height = 64,
-        offset = 0,
-        cameraOffset = 0,
-        collisionHeight = 0,
-        collisionWidth = 0,
-        collisionLength = 0,
-        speed = -1,
-        jump = -1
-    }
-end
-
-local function FormatMovementRuleValue(value)
-    value = NumberOr(value, -1)
-
-    if value == -1 then
-        return "auto"
-    end
-
-    if value == -2 then
-        return "base"
-    end
-
-    return tostring(math.Round(value, 2)) .. "x"
-end
-
 ReadRules()
 
 if not CanUseDebugBounds() and cvDebugBounds:GetBool() then
@@ -209,7 +157,7 @@ function AV.GetRule(model)
     return AV.ModelRules[NormalizeModel(model)]
 end
 
-function AV.SetRule(model, mode, height, offset, cameraOffset, collisionHeight, collisionWidth, collisionLength, speed, jump, shouldSave)
+function AV.SetRule(model, mode, height, offset, cameraOffset, collisionHeight, collisionWidth, collisionLength)
     model = NormalizeModel(model)
 
     if model == "" then
@@ -226,15 +174,11 @@ function AV.SetRule(model, mode, height, offset, cameraOffset, collisionHeight, 
             cameraOffset = NumberOr(cameraOffset, NumberOr(offset, 0)),
             collisionHeight = NumberOr(collisionHeight, 0),
             collisionWidth = NumberOr(collisionWidth, 0),
-            collisionLength = NumberOr(collisionLength, 0),
-            speed = NumberOr(speed, -1),
-            jump = NumberOr(jump, -1)
+            collisionLength = NumberOr(collisionLength, 0)
         })
     end
 
-    if shouldSave ~= false then
-        WriteRules()
-    end
+    WriteRules()
 
     if isfunction(AV.SyncSettingsToServer) then
         AV.SyncSettingsToServer()
@@ -419,7 +363,7 @@ local function FillRulesList(list)
         local collisionWidth = rule.collisionWidth and rule.collisionWidth > 0 and tostring(math.Round(rule.collisionWidth, 2)) or "auto"
         local collisionLength = rule.collisionLength and rule.collisionLength > 0 and tostring(math.Round(rule.collisionLength, 2)) or "auto"
 
-        list:AddLine(model, rule.mode, height, cameraOffset, collisionHeight, collisionWidth, collisionLength, FormatMovementRuleValue(rule.speed), FormatMovementRuleValue(rule.jump))
+        list:AddLine(model, rule.mode, height, cameraOffset, collisionHeight, collisionWidth, collisionLength)
     end
 end
 
@@ -571,11 +515,19 @@ local function OpenRuleEditor(oldModel, onSaved)
         return
     end
 
-    local rule = table.Copy(AV.GetRule(oldModel) or DefaultRule())
+    local rule = table.Copy(AV.GetRule(oldModel) or {
+        mode = "auto",
+        height = 64,
+        offset = 0,
+        cameraOffset = 0,
+        collisionHeight = 0,
+        collisionWidth = 0,
+        collisionLength = 0
+    })
 
     local frame = vgui.Create("DFrame")
     frame:SetTitle("Edit model rule (An improved version of this menu is under development)")
-    frame:SetSize(460, 470)
+    frame:SetSize(460, 400)
     frame:Center()
     frame:MakePopup()
 
@@ -640,22 +592,6 @@ local function OpenRuleEditor(oldModel, onSaved)
     collisionLengthSlider:SetDecimals(0)
     collisionLengthSlider:SetValue(rule.collisionLength or 0)
 
-    local speedSlider = vgui.Create("DNumSlider", frame)
-    speedSlider:Dock(TOP)
-    speedSlider:DockMargin(8, 0, 8, 0)
-    speedSlider:SetText("Speed (-2 base, -1 auto, 0 off)")
-    speedSlider:SetMinMax(-2, 5)
-    speedSlider:SetDecimals(2)
-    speedSlider:SetValue(NumberOr(rule.speed, -1))
-
-    local jumpSlider = vgui.Create("DNumSlider", frame)
-    jumpSlider:Dock(TOP)
-    jumpSlider:DockMargin(8, 0, 8, 0)
-    jumpSlider:SetText("Jump force (-2 base, -1 auto, 0 off)")
-    jumpSlider:SetMinMax(-2, 5)
-    jumpSlider:SetDecimals(2)
-    jumpSlider:SetValue(NumberOr(rule.jump, -1))
-
     local saveButton = vgui.Create("DButton", frame)
     saveButton:Dock(BOTTOM)
     saveButton:DockMargin(8, 6, 8, 8)
@@ -690,13 +626,11 @@ local function OpenRuleEditor(oldModel, onSaved)
             offsetSlider:GetValue(),
             collisionHeightSlider:GetValue(),
             collisionWidthSlider:GetValue(),
-            collisionLengthSlider:GetValue(),
-            speedSlider:GetValue(),
-            jumpSlider:GetValue()
+            collisionLengthSlider:GetValue()
         )
 
         if isfunction(onSaved) then
-            onSaved(newModel, mode, heightSlider:GetValue(), offsetSlider:GetValue(), collisionHeightSlider:GetValue(), collisionWidthSlider:GetValue(), collisionLengthSlider:GetValue(), speedSlider:GetValue(), jumpSlider:GetValue())
+            onSaved(newModel, mode, heightSlider:GetValue(), offsetSlider:GetValue(), collisionHeightSlider:GetValue(), collisionWidthSlider:GetValue(), collisionLengthSlider:GetValue())
         end
 
         oldModel = newModel
@@ -766,7 +700,6 @@ function OpenThanksWindow()
     addCredit("Doch kazaha", "Programming", "https://steamcommunity.com/profiles/76561199492270733")
     addCredit("TotallyARussian", "For the idea of adding a width change, and separating the overview from the Box. (It's there now, but it's not implemented properly, this feature will manifest itself in the Rule menu update)", "https://steamcommunity.com/id/xXxedgemasterxXx")
     addCredit("TheRyleeFella", "Finding a bug related to grenades from ARC Escape From Tarkov.", "https://steamcommunity.com/profiles/76561199199788875")
-    addCredit("KarmotineOverdose", "For the idea of sliders for movement speed and jump power adjustment!", "https://steamcommunity.com/id/karmotineov")
 end
 
 local function AddAdaptiveViewMenu()
@@ -850,20 +783,6 @@ local function AddAdaptiveViewMenu()
         collisionLengthSlider:SetValue(0)
         panel:AddItem(collisionLengthSlider)
 
-        local speedSlider = vgui.Create("DNumSlider")
-        speedSlider:SetText("Speed (-2 base, -1 auto, 0 off)")
-        speedSlider:SetMinMax(-2, 5)
-        speedSlider:SetDecimals(2)
-        speedSlider:SetValue(-1)
-        panel:AddItem(speedSlider)
-
-        local jumpSlider = vgui.Create("DNumSlider")
-        jumpSlider:SetText("Jump force (-2 base, -1 auto, 0 off)")
-        jumpSlider:SetMinMax(-2, 5)
-        jumpSlider:SetDecimals(2)
-        jumpSlider:SetValue(-1)
-        panel:AddItem(jumpSlider)
-
         local modeBox = vgui.Create("DComboBox")
         modeBox:AddChoice("Auto height", "auto", true)
         modeBox:AddChoice("Exact height", "height")
@@ -879,8 +798,7 @@ local function AddAdaptiveViewMenu()
         list:AddColumn("HB height")
         list:AddColumn("HB width")
         list:AddColumn("HB length")
-        list:AddColumn("Speed")
-        list:AddColumn("Jump")
+        panel:AddItem(list)
 
         local function getSelectedRule()
             local selected = list:GetSelectedLine()
@@ -895,19 +813,7 @@ local function AddAdaptiveViewMenu()
             return model, model and AV.GetRule(model)
         end
 
-        local function resetRuleControls(rule)
-            rule = rule or DefaultRule()
-            modeBox:ChooseOptionID(rule.mode == "height" and 2 or rule.mode == "off" and 3 or 1)
-            heightSlider:SetValue(rule.height or 64)
-            offsetSlider:SetValue(rule.cameraOffset or rule.offset or 0)
-            collisionHeightSlider:SetValue(rule.collisionHeight or 0)
-            collisionWidthSlider:SetValue(rule.collisionWidth or 0)
-            collisionLengthSlider:SetValue(rule.collisionLength or 0)
-            speedSlider:SetValue(NumberOr(rule.speed, -1))
-            jumpSlider:SetValue(NumberOr(rule.jump, -1))
-        end
-
-        local function saveRuleForModel(model, shouldSave)
+        local function saveRuleForModel(model)
             local selectedID = modeBox:GetSelectedID() or 1
             local mode = modeBox:GetOptionData(selectedID)
             AV.SetRule(
@@ -918,27 +824,9 @@ local function AddAdaptiveViewMenu()
                 offsetSlider:GetValue(),
                 collisionHeightSlider:GetValue(),
                 collisionWidthSlider:GetValue(),
-                collisionLengthSlider:GetValue(),
-                speedSlider:GetValue(),
-                jumpSlider:GetValue(),
-                shouldSave
+                collisionLengthSlider:GetValue()
             )
             FillRulesList(list)
-        end
-
-        local function applyCurrentModelRule(shouldSave)
-            if not IsValid(LocalPlayer()) then
-                return
-            end
-
-            local model = NormalizeModel(LocalPlayer():GetModel())
-
-            if model == "" or not AV.GetRule(model) then
-                return
-            end
-
-            modelEntry:SetText(model)
-            saveRuleForModel(model, shouldSave)
         end
 
         list.OnRowSelected = function(_, _, row)
@@ -948,7 +836,12 @@ local function AddAdaptiveViewMenu()
             modelEntry:SetText(model)
 
             if rule then
-                resetRuleControls(rule)
+                modeBox:ChooseOptionID(rule.mode == "height" and 2 or rule.mode == "off" and 3 or 1)
+                heightSlider:SetValue(rule.height or 64)
+                offsetSlider:SetValue(rule.cameraOffset or rule.offset or 0)
+                collisionHeightSlider:SetValue(rule.collisionHeight or 0)
+                collisionWidthSlider:SetValue(rule.collisionWidth or 0)
+                collisionLengthSlider:SetValue(rule.collisionLength or 0)
             end
         end
 
@@ -966,7 +859,7 @@ local function AddAdaptiveViewMenu()
         end
 
         list.DoDoubleClick = function(_, _, row)
-            OpenRuleEditor(row:GetColumnText(1), function(newModel, mode, height, offset, collisionHeight, collisionWidth, collisionLength, speed, jump)
+            OpenRuleEditor(row:GetColumnText(1), function(newModel, mode, height, offset, collisionHeight, collisionWidth, collisionLength)
                 modelEntry:SetText(newModel)
                 modeBox:ChooseOptionID(mode == "height" and 2 or mode == "off" and 3 or 1)
                 heightSlider:SetValue(height or 64)
@@ -974,68 +867,27 @@ local function AddAdaptiveViewMenu()
                 collisionHeightSlider:SetValue(collisionHeight or 0)
                 collisionWidthSlider:SetValue(collisionWidth or 0)
                 collisionLengthSlider:SetValue(collisionLength or 0)
-                speedSlider:SetValue(NumberOr(speed, -1))
-                jumpSlider:SetValue(NumberOr(jump, -1))
                 FillRulesList(list)
             end)
         end
 
-        local applyButton = panel:Button("Apply")
-        applyButton.DoClick = function()
-            applyCurrentModelRule(false)
-        end
-
-        local applySaveButton = panel:Button("Apply & Save")
-        applySaveButton.DoClick = function()
-            applyCurrentModelRule(true)
-        end
-
-        local backButton = panel:Button("Back to save")
-        backButton.DoClick = function()
-            local model = NormalizeModel(IsValid(LocalPlayer()) and LocalPlayer():GetModel() or modelEntry:GetText())
-            local rule = model ~= "" and ReadSavedRule(model)
-
-            if not rule then
-                return
-            end
-
-            modelEntry:SetText(model)
-            resetRuleControls(rule)
-            AV.ModelRules[model] = rule
-            FillRulesList(list)
-
-            if isfunction(AV.SyncSettingsToServer) then
-                AV.SyncSettingsToServer()
-            end
-        end
-
-        panel:AddItem(list)
-
         local saveButton = panel:Button("Save model rule")
         saveButton.DoClick = function()
-            saveRuleForModel(modelEntry:GetText(), true)
+            saveRuleForModel(modelEntry:GetText())
         end
 
         local addButton = panel:Button("Add model from picker")
         addButton.DoClick = function()
             OpenModelPicker("Add model rule", modelEntry:GetText(), function(model)
                 modelEntry:SetText(model)
-                resetRuleControls(DefaultRule())
-                saveRuleForModel(model, true)
+                saveRuleForModel(model)
             end)
         end
 
         local currentButton = panel:Button("Use current model")
         currentButton.DoClick = function()
             if IsValid(LocalPlayer()) then
-                local model = NormalizeModel(LocalPlayer():GetModel())
-                modelEntry:SetText(model)
-
-                local rule = AV.GetRule(model)
-
-                if rule then
-                    resetRuleControls(rule)
-                end
+                modelEntry:SetText(LocalPlayer():GetModel())
             end
         end
 

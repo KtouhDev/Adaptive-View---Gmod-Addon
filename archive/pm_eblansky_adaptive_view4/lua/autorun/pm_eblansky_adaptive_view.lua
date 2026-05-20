@@ -7,11 +7,6 @@ local GetRule
 AV.ModelCollisionBounds = {}
 AV.Generation = (AV.Generation or 0) + 1
 local GENERATION = AV.Generation
-local MIN_SPEED_SCALE = 0.75
-local MAX_SPEED_SCALE = 1.3
-local MIN_JUMP_SCALE = 0.85
-local MAX_JUMP_SCALE = 1.15
-local ENTITY_DAMAGE_BOUNDS_GRACE = 2
 
 if SERVER then
     AddCSLuaFile("autorun/client/pm_eblansky_adaptive_view.lua")
@@ -378,7 +373,6 @@ local function SetEntityCollisionBoundsStable(ent, mins, maxs)
     ent.pmavLastBoundsMins = Vector(mins.x, mins.y, mins.z)
     ent.pmavLastBoundsMaxs = Vector(maxs.x, maxs.y, maxs.z)
     ent.pmavAdaptiveBoundsApplied = true
-    ent.pmavAdaptiveBoundsAppliedAt = CurTime()
     ent.pmavBlockExternalCollisionBounds = true
 
     AV.InternalCollisionApply = true
@@ -402,18 +396,6 @@ end
 
 local function IsWorldPointInsideAdaptiveBounds(ent, pos, padding)
     return IsUsableDamagePoint(pos) and IsPointInsideBounds(ent:WorldToLocal(pos), ent.pmavLastBoundsMins, ent.pmavLastBoundsMaxs, padding or 1)
-end
-
-local function CanUseAdaptiveDamageBounds(ent)
-    if not IsValid(ent) or not ent.pmavAdaptiveBoundsApplied then
-        return false
-    end
-
-    local createdAt = NumberOr(ent.pmavCreatedAt, 0)
-    local appliedAt = NumberOr(ent.pmavAdaptiveBoundsAppliedAt, 0)
-    local readyAt = math.max(createdAt, appliedAt) + ENTITY_DAMAGE_BOUNDS_GRACE
-
-    return CurTime() >= readyAt
 end
 
 local function DamageInfoHasType(dmginfo, damageType)
@@ -488,7 +470,7 @@ local function RayIntersectsAdaptiveBounds(ent, startPos, direction, padding)
 end
 
 local function ShouldBlockAdaptiveDamage(ent, dmginfo)
-    if not IsValid(ent) or ent:IsPlayer() or not CanUseAdaptiveDamageBounds(ent) then
+    if not IsValid(ent) or ent:IsPlayer() or not ent.pmavAdaptiveBoundsApplied then
         return false
     end
 
@@ -588,9 +570,7 @@ local function SanitizeRule(rule)
         cameraOffset = math.Clamp(NumberOr(rule.cameraOffset, NumberOr(rule.offset, 0)), -64, 64),
         collisionHeight = math.Clamp(NumberOr(rule.collisionHeight, 0), 0, 180),
         collisionWidth = math.Clamp(NumberOr(rule.collisionWidth, 0), 0, 96),
-        collisionLength = math.Clamp(NumberOr(rule.collisionLength, 0), 0, 96),
-        speed = math.Clamp(NumberOr(rule.speed, -1), -2, 20),
-        jump = math.Clamp(NumberOr(rule.jump, -1), -2, 20)
+        collisionLength = math.Clamp(NumberOr(rule.collisionLength, 0), 0, 96)
     }
 end
 
@@ -856,43 +836,19 @@ local function RestorePlayer(ply)
     if ply.pmavDefaultJumpPower and isfunction(ply.SetJumpPower) then
         ply:SetJumpPower(ply.pmavDefaultJumpPower)
     end
-
-    ply.pmavMovementScale = 1
-    ply.pmavJumpScale = 1
 end
 
-local function ResolveRuleMovementScale(value, autoScale, autoEnabled)
-    value = NumberOr(value, -1)
-
-    if value == -2 then
-        return 1
-    end
-
-    if value == -1 then
-        return autoEnabled and autoScale or 1
-    end
-
-    return math.max(value, 0)
-end
-
-local function ApplyPlayerMovementScale(ply, settings, hullHeight, rule)
+local function ApplyPlayerMovementScale(ply, settings, hullHeight)
     local defaultHullHeight = math.max(NumberOr(ply.pmavDefaultHullMaxs and ply.pmavDefaultHullMaxs.z, 72), 1)
-    local rawScale = NumberOr(hullHeight, defaultHullHeight) / defaultHullHeight
-    local speedScale = math.Clamp(rawScale, MIN_SPEED_SCALE, MAX_SPEED_SCALE)
-    local jumpScale = math.Clamp(1 + (rawScale - 1) * 0.45, MIN_JUMP_SCALE, MAX_JUMP_SCALE)
-    speedScale = ResolveRuleMovementScale(rule and rule.speed, speedScale, settings.adaptiveSpeed)
-    jumpScale = ResolveRuleMovementScale(rule and rule.jump, jumpScale, settings.adaptiveJump)
+    local scale = math.Clamp(NumberOr(hullHeight, defaultHullHeight) / defaultHullHeight, 0.65, 1.25)
 
-    ply.pmavMovementScale = speedScale
-    ply.pmavJumpScale = jumpScale
-
-    if settings.adaptiveSpeed or (rule and NumberOr(rule.speed, -1) ~= -1) then
+    if settings.adaptiveSpeed then
         if ply.pmavDefaultWalkSpeed and isfunction(ply.SetWalkSpeed) then
-            ply:SetWalkSpeed(math.max(math.Round(ply.pmavDefaultWalkSpeed * speedScale), 0))
+            ply:SetWalkSpeed(math.max(math.Round(ply.pmavDefaultWalkSpeed * scale), 1))
         end
 
         if ply.pmavDefaultRunSpeed and isfunction(ply.SetRunSpeed) then
-            ply:SetRunSpeed(math.max(math.Round(ply.pmavDefaultRunSpeed * speedScale), 0))
+            ply:SetRunSpeed(math.max(math.Round(ply.pmavDefaultRunSpeed * scale), 1))
         end
     else
         if ply.pmavDefaultWalkSpeed and isfunction(ply.SetWalkSpeed) then
@@ -904,9 +860,9 @@ local function ApplyPlayerMovementScale(ply, settings, hullHeight, rule)
         end
     end
 
-    if settings.adaptiveJump or (rule and NumberOr(rule.jump, -1) ~= -1) then
+    if settings.adaptiveJump then
         if ply.pmavDefaultJumpPower and isfunction(ply.SetJumpPower) then
-            ply:SetJumpPower(math.max(math.Round(ply.pmavDefaultJumpPower * jumpScale), 0))
+            ply:SetJumpPower(math.max(math.Round(ply.pmavDefaultJumpPower * scale), 1))
         end
     elseif ply.pmavDefaultJumpPower and isfunction(ply.SetJumpPower) then
         ply:SetJumpPower(ply.pmavDefaultJumpPower)
@@ -976,10 +932,10 @@ local function ApplyPlayer(ply)
         end
 
         SetPlayerHullStable(ply, hullMins, hullMaxs, duckHullMins, duckHullMaxs)
-        ApplyPlayerMovementScale(ply, settings, hullHeight, rule)
+        ApplyPlayerMovementScale(ply, settings, hullHeight)
     else
         SetPlayerHullStable(ply, ply.pmavDefaultHullMins, ply.pmavDefaultHullMaxs, ply.pmavDefaultDuckMins, ply.pmavDefaultDuckMaxs)
-        ApplyPlayerMovementScale(ply, settings, ply.pmavDefaultHullMaxs.z, GetRule(settings, ply:GetModel()))
+        ApplyPlayerMovementScale(ply, settings, ply.pmavDefaultHullMaxs.z)
     end
 end
 
@@ -1126,7 +1082,6 @@ local function RestoreEntity(ent)
 
     ent.pmavBlockExternalCollisionBounds = false
     ent.pmavAdaptiveBoundsApplied = false
-    ent.pmavAdaptiveBoundsAppliedAt = nil
     ent.pmavLastBulletHitPos = nil
     ent.pmavLastBulletHitTime = nil
 
@@ -1151,7 +1106,6 @@ local function ApplyEntity(ent)
     end
 
     AV.ManagedEntities[ent] = true
-    ent.pmavCreatedAt = ent.pmavCreatedAt or CurTime()
     CaptureEntityDefaults(ent)
 
     local settings = CopySettingsForWorld(AV.SharedSettings)
@@ -1226,9 +1180,7 @@ local function GetWorldSettingsSignature(settings)
             tostring(math.Round(NumberOr(rule.cameraOffset, 0), 3)),
             tostring(math.Round(NumberOr(rule.collisionHeight, 0), 3)),
             tostring(math.Round(NumberOr(rule.collisionWidth, 0), 3)),
-            tostring(math.Round(NumberOr(rule.collisionLength, 0), 3)),
-            tostring(math.Round(NumberOr(rule.speed, -1), 3)),
-            tostring(math.Round(NumberOr(rule.jump, -1), 3))
+            tostring(math.Round(NumberOr(rule.collisionLength, 0), 3))
         }, ":")
     end
 
@@ -1338,7 +1290,6 @@ net.Receive(NET_SETTINGS, function(_, ply)
 end)
 
 hook.Add("OnEntityCreated", "pm_eblansky_adaptive_view_entities", function(ent)
-    ent.pmavCreatedAt = CurTime()
     ScheduleEntityApply(ent)
 end)
 
@@ -1354,7 +1305,7 @@ hook.Add("EntityFireBullets", "pm_eblansky_adaptive_view_bullet_bounds", functio
     local oldCallback = data.Callback
 
     data.Callback = function(attacker, trace, dmginfo)
-        if trace and IsValid(trace.Entity) and CanUseAdaptiveDamageBounds(trace.Entity) and IsUsableDamagePoint(trace.HitPos) then
+        if trace and IsValid(trace.Entity) and trace.Entity.pmavAdaptiveBoundsApplied and IsUsableDamagePoint(trace.HitPos) then
             trace.Entity.pmavLastBulletHitPos = trace.HitPos
             trace.Entity.pmavLastBulletHitTime = CurTime()
 
@@ -1445,36 +1396,6 @@ end)
 
 hook.Add("PlayerDeath", "pm_eblansky_adaptive_view", function(ply)
     InvalidatePlayerStableState(ply)
-end)
-
-hook.Add("OnPlayerHitGround", "pm_eblansky_adaptive_view_soft_landing", function(ply, inWater, onFloater, speed)
-    if not IsValid(ply) or inWater or onFloater then
-        return
-    end
-
-    local settings = GetSettingsForPlayer(ply)
-
-    if not settings or not settings.enabled then
-        return
-    end
-
-    local rule = GetRule(settings, ply:GetModel())
-
-    if not settings.adaptiveJump and not (rule and NumberOr(rule.jump, -1) ~= -1) then
-        return
-    end
-
-    local jumpScale = NumberOr(ply.pmavJumpScale, 1)
-
-    if jumpScale >= 0.95 then
-        return
-    end
-
-    -- Tiny adaptive hulls should not play heavy landing behavior after a
-    -- normal scaled jump, but real high-speed falls still pass through.
-    if NumberOr(speed, 0) <= 520 then
-        return true
-    end
 end)
 
 hook.Add("PlayerDisconnected", "pm_eblansky_adaptive_view", function(ply)

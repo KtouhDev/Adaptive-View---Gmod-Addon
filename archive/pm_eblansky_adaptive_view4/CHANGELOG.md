@@ -2,15 +2,6 @@
 
 ## 2026-05-20
 
-- Added per-model `Speed` and `Jump force` rule values.
-- Added quick rule editor buttons: `Apply`, `Apply & Save`, and `Back to save`.
-- Changed quick rule editing so temporary Apply changes do not write to the local rules file.
-- Added default `speed = -1` and `jump = -1` values to normalized model rules for old and new configs.
-- Increased the automatic minimum movement speed scale for small models.
-- Reworked adaptive jump scaling so tiny models no longer get extremely weak jumps.
-- Added soft landing handling for small models using adaptive jump scaling.
-- Added a short NPC/NextBot damage-bounds grace period after spawn/apply to prevent Lambda Players from briefly taking no or incorrect bullet damage.
-- Added KarmotineOverdose to the `Thank them!` credits window for the movement slider idea.
 - Added multiplayer permission hardening for Adaptive View settings.
 - Added `pmav_alladmins` to optionally allow non-admin players to edit settings.
 - Added `pmav_injail` to lock the settings menu for everyone, including admins.

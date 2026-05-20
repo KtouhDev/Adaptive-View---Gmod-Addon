@@ -1,0 +1,16 @@
+{
+  "title": "Adaptive View",
+  "type": "tool",
+  "tags": [
+    "fun",
+    "realism"
+  ],
+  "ignore": [
+              ".git/",
+              ".psd",
+              "*.gma",
+              "*.md",
+              "*.txt",
+              "*.bak*"
+            ]
+}
