@@ -92,26 +92,6 @@ local function NumberOr(value, fallback)
     return value
 end
 
-local function GetAdaptiveModelScale(ent, settings)
-    if not settings or settings.scaleSupport ~= true or not IsValid(ent) or not isfunction(ent.GetModelScale) then
-        return 1
-    end
-
-    local minScale = math.max(NumberOr(settings.scaleMin, 0.5), 0.01)
-    local maxScale = math.max(NumberOr(settings.scaleMax, 2), minScale)
-
-    return math.Clamp(NumberOr(ent:GetModelScale(), 1), minScale, maxScale)
-end
-
-local function ScaleBounds(mins, maxs, scale)
-    if math.abs(scale - 1) < 0.001 then
-        return mins, maxs
-    end
-
-    return Vector(mins.x * scale, mins.y * scale, mins.z * scale),
-        Vector(maxs.x * scale, maxs.y * scale, maxs.z * scale)
-end
-
 local function GetStableModelBounds(ent, fallbackMins, fallbackMaxs)
     if not IsValid(ent) then
         return fallbackMins, fallbackMaxs
@@ -173,23 +153,22 @@ local function GetSaneHorizontalBounds(modelMins, modelMaxs, defaultMins, defaul
     return -halfX, -halfY, halfX, halfY
 end
 
-local function ApplyRuleHorizontalOverrides(rule, minX, minY, maxX, maxY, scale)
+local function ApplyRuleHorizontalOverrides(rule, minX, minY, maxX, maxY)
     if not rule then
         return minX, minY, maxX, maxY
     end
 
-    scale = NumberOr(scale, 1)
     local length = NumberOr(rule.collisionLength, 0)
     local width = NumberOr(rule.collisionWidth, 0)
 
     if length > 0 then
-        local halfLength = math.Clamp(length * scale * 0.5, 6, 48)
+        local halfLength = math.Clamp(length * 0.5, 6, 48)
         minX = -halfLength
         maxX = halfLength
     end
 
     if width > 0 then
-        local halfWidth = math.Clamp(width * scale * 0.5, 6, 48)
+        local halfWidth = math.Clamp(width * 0.5, 6, 48)
         minY = -halfWidth
         maxY = halfWidth
     end
@@ -367,31 +346,6 @@ local function SetPlayerHullStable(ply, mins, maxs, duckMins, duckMaxs)
     ply:SetHullDuck(duckMins, duckMaxs)
 
     BroadcastBounds(ply, mins, maxs, duckMins, duckMaxs)
-end
-
-local function SetPlayerStandHullStable(ply, mins, maxs)
-    local actualMins, actualMaxs = ply:GetHull()
-    local actualMatches = NearlyEqualVector(actualMins, mins) and NearlyEqualVector(actualMaxs, maxs)
-
-    if ply.pmavLastHullMins and
-        NearlyEqualVector(ply.pmavLastHullMins, mins) and
-        NearlyEqualVector(ply.pmavLastHullMaxs, maxs) and
-        actualMatches then
-        BroadcastBounds(ply, mins, maxs, ply.pmavLastDuckMins, ply.pmavLastDuckMaxs)
-        return
-    end
-
-    ply.pmavLastHullMins = Vector(mins.x, mins.y, mins.z)
-    ply.pmavLastHullMaxs = Vector(maxs.x, maxs.y, maxs.z)
-
-    ply:SetHull(mins, maxs)
-
-    BroadcastBounds(ply, mins, maxs, ply.pmavLastDuckMins, ply.pmavLastDuckMaxs)
-end
-
-local function SetPlayerDuckHullCache(ply, duckMins, duckMaxs)
-    ply.pmavLastDuckMins = Vector(duckMins.x, duckMins.y, duckMins.z)
-    ply.pmavLastDuckMaxs = Vector(duckMaxs.x, duckMaxs.y, duckMaxs.z)
 end
 
 local function SetPlayerViewOffsetsStable(ply, stand, duck)
@@ -660,12 +614,6 @@ local function SanitizeSettings(settings)
         enabled = settings.enabled ~= false,
         autoScale = math.Clamp(NumberOr(settings.autoScale, 0.92), 0.1, 2),
         globalOffset = math.Clamp(NumberOr(settings.globalOffset, 0), -64, 64),
-        cameraFov = math.Clamp(NumberOr(settings.cameraFov, 0), 0, 160),
-        cameraOffsetX = math.Clamp(NumberOr(settings.cameraOffsetX, 0), -64, 64),
-        cameraOffsetY = math.Clamp(NumberOr(settings.cameraOffsetY, 0), -64, 64),
-        scaleSupport = settings.scaleSupport ~= false,
-        scaleMin = math.Clamp(NumberOr(settings.scaleMin, 0.5), 0.05, 10),
-        scaleMax = math.max(math.Clamp(NumberOr(settings.scaleMax, 2), 0.05, 10), math.Clamp(NumberOr(settings.scaleMin, 0.5), 0.05, 10)),
         minHeight = math.Clamp(NumberOr(settings.minHeight, 4), 0, 120),
         maxHeight = math.Clamp(NumberOr(settings.maxHeight, 120), 8, 180),
         clientHeight = math.Clamp(NumberOr(settings.clientHeight, 0), 0, 180),
@@ -735,19 +683,13 @@ local function GetModelAutoHeight(ply, settings)
 
     if not modelHeight then
         local _, maxs = ply:GetModelBounds()
-        modelHeight = math.max(NumberOr(maxs and maxs.z, 72) * settings.autoScale * GetAdaptiveModelScale(ply, settings), 1)
+        modelHeight = math.max(NumberOr(maxs and maxs.z, 72) * settings.autoScale, 1)
     end
 
     local minHeight = settings.minHeight
     local maxHeight = math.max(settings.maxHeight, minHeight)
 
     return math.Clamp(modelHeight, minHeight, maxHeight)
-end
-
-local function IsTacMoveActive()
-    local tacMove = GetConVar("vb_movement")
-
-    return tacMove and tacMove:GetBool()
 end
 
 local function GetTargetHeights(ply, settings)
@@ -757,14 +699,12 @@ local function GetTargetHeights(ply, settings)
         return nil
     end
 
-    local scale = GetAdaptiveModelScale(ply, settings)
-    local standHeight = rule and rule.mode == "height" and rule.height * scale or GetModelAutoHeight(ply, settings)
+    local standHeight = rule and rule.mode == "height" and rule.height or GetModelAutoHeight(ply, settings)
     standHeight = standHeight + settings.globalOffset + GetRuleCameraOffset(rule)
 
     local mins, maxs = ply:GetModelBounds()
     mins = mins or Vector(0, 0, 0)
     maxs = maxs or Vector(16, 16, 72)
-    mins, maxs = ScaleBounds(mins, maxs, scale)
 
     local footSafeHeight = math.max(NumberOr(mins.z, 0) + 8, 4)
     standHeight = math.Clamp(standHeight, footSafeHeight, math.max(settings.maxHeight, footSafeHeight))
@@ -772,11 +712,6 @@ local function GetTargetHeights(ply, settings)
     local defaultStand = ply.pmavDefaultStand or Vector(0, 0, 64)
     local defaultDuck = ply.pmavDefaultDuck or Vector(0, 0, 28)
     local duckRatio = defaultStand.z ~= 0 and defaultDuck.z / defaultStand.z or 0.4375
-
-    if IsTacMoveActive() then
-        duckRatio = 28 / 64
-    end
-
     local duckHeight = math.max(standHeight * duckRatio, footSafeHeight)
 
     return standHeight, duckHeight, mins, maxs
@@ -789,13 +724,12 @@ local function GetEntityTargetHeight(ent, settings, modelMins, modelMaxs)
         return nil
     end
 
-    local scale = GetAdaptiveModelScale(ent, settings)
     local targetHeight = math.max(NumberOr(modelMaxs and modelMaxs.z, 72) * settings.autoScale, 1)
 
     local ruleCollisionHeight = GetRuleCollisionHeight(rule)
 
     if ruleCollisionHeight > 0 then
-        targetHeight = ruleCollisionHeight * scale
+        targetHeight = ruleCollisionHeight
     end
 
     local footSafeHeight = math.max(NumberOr(modelMins and modelMins.z, 0) + 8, 4)
@@ -811,47 +745,23 @@ local function GetPlayerAutoCollisionHeight(ply, settings, modelMins)
 end
 
 if CLIENT then
-    local function ClientConVarFloat(name, fallback)
-        local convar = GetConVar(name)
-
-        return convar and convar:GetFloat() or fallback
-    end
-
-    local function ClientConVarBool(name, fallback)
-        local convar = GetConVar(name)
-
-        return convar and convar:GetBool() or fallback
-    end
-
-    local function ClientConVarInt(name, fallback)
-        local convar = GetConVar(name)
-
-        return convar and convar:GetInt() or fallback
-    end
-
     AV.BuildSettingsPayload = function()
         return SanitizeSettings({
-            enabled = ClientConVarBool("pmav_enabled", true),
-            autoScale = ClientConVarFloat("pmav_auto_scale", 0.92),
-            globalOffset = ClientConVarFloat("pmav_global_offset", 0),
-            cameraFov = ClientConVarFloat("pmav_camera_fov", 0),
-            cameraOffsetX = ClientConVarFloat("pmav_camera_offset_x", 0),
-            cameraOffsetY = ClientConVarFloat("pmav_camera_offset_y", 0),
-            scaleSupport = ClientConVarBool("pmav_scale_support", true),
-            scaleMin = ClientConVarFloat("pmav_scale_min", 0.5),
-            scaleMax = ClientConVarFloat("pmav_scale_max", 2),
-            minHeight = ClientConVarFloat("pmav_min_height", 4),
-            maxHeight = ClientConVarFloat("pmav_max_height", 120),
+            enabled = GetConVar("pmav_enabled"):GetBool(),
+            autoScale = GetConVar("pmav_auto_scale"):GetFloat(),
+            globalOffset = GetConVar("pmav_global_offset"):GetFloat(),
+            minHeight = GetConVar("pmav_min_height"):GetFloat(),
+            maxHeight = GetConVar("pmav_max_height"):GetFloat(),
             clientHeight = AV.GetLocalAutoHeight and AV.GetLocalAutoHeight() or 0,
             smooth = 10,
-            collision = ClientConVarBool("pmav_collision", true),
-            collisionMode = ClientConVarInt("pmav_collision_mode", 3),
-            collisionRadius = ClientConVarFloat("pmav_collision_radius", 16),
-            collisionOnlyPlayers = ClientConVarBool("pmav_collision_only_players", false),
-            npcCollision = ClientConVarBool("pmav_npc_collision", true),
-            multiplayerSafe = ClientConVarBool("pmav_multiplayer_safe", true),
-            adaptiveSpeed = ClientConVarBool("pmav_adaptive_speed", false),
-            adaptiveJump = ClientConVarBool("pmav_adaptive_jump", false),
+            collision = GetConVar("pmav_collision"):GetBool(),
+            collisionMode = GetConVar("pmav_collision_mode"):GetInt(),
+            collisionRadius = GetConVar("pmav_collision_radius"):GetFloat(),
+            collisionOnlyPlayers = GetConVar("pmav_collision_only_players"):GetBool(),
+            npcCollision = GetConVar("pmav_npc_collision"):GetBool(),
+            multiplayerSafe = GetConVar("pmav_multiplayer_safe"):GetBool(),
+            adaptiveSpeed = GetConVar("pmav_adaptive_speed"):GetBool(),
+            adaptiveJump = GetConVar("pmav_adaptive_jump"):GetBool(),
             rules = AV.ModelRules or {}
         })
     end
@@ -935,32 +845,24 @@ local function RestorePlayer(ply)
     SetPlayerViewOffsetsStable(ply, ply.pmavDefaultStand, ply.pmavDefaultDuck)
     SetPlayerHullStable(ply, ply.pmavDefaultHullMins, ply.pmavDefaultHullMaxs, ply.pmavDefaultDuckMins, ply.pmavDefaultDuckMaxs)
 
-    if ply.pmavAppliedSpeed and ply.pmavDefaultWalkSpeed and isfunction(ply.SetWalkSpeed) then
+    if ply.pmavDefaultWalkSpeed and isfunction(ply.SetWalkSpeed) then
         ply:SetWalkSpeed(ply.pmavDefaultWalkSpeed)
     end
 
-    if ply.pmavAppliedSpeed and ply.pmavDefaultRunSpeed and isfunction(ply.SetRunSpeed) then
+    if ply.pmavDefaultRunSpeed and isfunction(ply.SetRunSpeed) then
         ply:SetRunSpeed(ply.pmavDefaultRunSpeed)
     end
 
-    if ply.pmavAppliedJump and ply.pmavDefaultJumpPower and isfunction(ply.SetJumpPower) then
+    if ply.pmavDefaultJumpPower and isfunction(ply.SetJumpPower) then
         ply:SetJumpPower(ply.pmavDefaultJumpPower)
     end
 
     ply.pmavMovementScale = 1
     ply.pmavJumpScale = 1
-    ply.pmavAppliedSpeed = false
-    ply.pmavAppliedJump = false
-    ply.pmavCurrentStandHeight = nil
-    ply.pmavCurrentDuckHeight = nil
 end
 
 local function ResolveRuleMovementScale(value, autoScale, autoEnabled)
     value = NumberOr(value, -1)
-
-    if math.abs(value) < 0.0001 then
-        return 1
-    end
 
     if value == -2 then
         return 1
@@ -971,37 +873,6 @@ local function ResolveRuleMovementScale(value, autoScale, autoEnabled)
     end
 
     return math.max(value, 0)
-end
-
-local function ShouldApplyMovementScale(ruleValue, autoEnabled)
-    ruleValue = NumberOr(ruleValue, -1)
-
-    if math.abs(ruleValue) < 0.0001 then
-        return false
-    end
-
-    return autoEnabled or ruleValue ~= -1
-end
-
-local function RestoreAppliedMovementScale(ply)
-    if ply.pmavAppliedSpeed then
-        if ply.pmavDefaultWalkSpeed and isfunction(ply.SetWalkSpeed) then
-            ply:SetWalkSpeed(ply.pmavDefaultWalkSpeed)
-        end
-
-        if ply.pmavDefaultRunSpeed and isfunction(ply.SetRunSpeed) then
-            ply:SetRunSpeed(ply.pmavDefaultRunSpeed)
-        end
-    end
-
-    if ply.pmavAppliedJump and ply.pmavDefaultJumpPower and isfunction(ply.SetJumpPower) then
-        ply:SetJumpPower(ply.pmavDefaultJumpPower)
-    end
-
-    ply.pmavMovementScale = 1
-    ply.pmavJumpScale = 1
-    ply.pmavAppliedSpeed = false
-    ply.pmavAppliedJump = false
 end
 
 local function ApplyPlayerMovementScale(ply, settings, hullHeight, rule)
@@ -1015,7 +886,7 @@ local function ApplyPlayerMovementScale(ply, settings, hullHeight, rule)
     ply.pmavMovementScale = speedScale
     ply.pmavJumpScale = jumpScale
 
-    if ShouldApplyMovementScale(rule and rule.speed, settings.adaptiveSpeed) then
+    if settings.adaptiveSpeed or (rule and NumberOr(rule.speed, -1) ~= -1) then
         if ply.pmavDefaultWalkSpeed and isfunction(ply.SetWalkSpeed) then
             ply:SetWalkSpeed(math.max(math.Round(ply.pmavDefaultWalkSpeed * speedScale), 0))
         end
@@ -1023,27 +894,22 @@ local function ApplyPlayerMovementScale(ply, settings, hullHeight, rule)
         if ply.pmavDefaultRunSpeed and isfunction(ply.SetRunSpeed) then
             ply:SetRunSpeed(math.max(math.Round(ply.pmavDefaultRunSpeed * speedScale), 0))
         end
-        ply.pmavAppliedSpeed = true
     else
-        if ply.pmavAppliedSpeed and ply.pmavDefaultWalkSpeed and isfunction(ply.SetWalkSpeed) then
+        if ply.pmavDefaultWalkSpeed and isfunction(ply.SetWalkSpeed) then
             ply:SetWalkSpeed(ply.pmavDefaultWalkSpeed)
         end
 
-        if ply.pmavAppliedSpeed and ply.pmavDefaultRunSpeed and isfunction(ply.SetRunSpeed) then
+        if ply.pmavDefaultRunSpeed and isfunction(ply.SetRunSpeed) then
             ply:SetRunSpeed(ply.pmavDefaultRunSpeed)
         end
-
-        ply.pmavAppliedSpeed = false
     end
 
-    if ShouldApplyMovementScale(rule and rule.jump, settings.adaptiveJump) then
+    if settings.adaptiveJump or (rule and NumberOr(rule.jump, -1) ~= -1) then
         if ply.pmavDefaultJumpPower and isfunction(ply.SetJumpPower) then
             ply:SetJumpPower(math.max(math.Round(ply.pmavDefaultJumpPower * jumpScale), 0))
         end
-        ply.pmavAppliedJump = true
-    elseif ply.pmavAppliedJump and ply.pmavDefaultJumpPower and isfunction(ply.SetJumpPower) then
+    elseif ply.pmavDefaultJumpPower and isfunction(ply.SetJumpPower) then
         ply:SetJumpPower(ply.pmavDefaultJumpPower)
-        ply.pmavAppliedJump = false
     end
 end
 
@@ -1068,26 +934,19 @@ local function ApplyPlayer(ply)
         return
     end
 
-    ply.pmavCurrentStandHeight = standHeight
-    ply.pmavCurrentDuckHeight = duckHeight
-
     SetPlayerViewOffsetsStable(
         ply,
         Vector(ply.pmavDefaultStand.x, ply.pmavDefaultStand.y, standHeight),
         Vector(ply.pmavDefaultDuck.x, ply.pmavDefaultDuck.y, duckHeight)
     )
 
-    local tacMoveActive = IsTacMoveActive() --Наебни говна, дочь казаха за помощь в этом аддоне
-
     if settings.collision and settings.collisionMode > 0 then
         local resizeHeight = settings.collisionMode == 1 or settings.collisionMode == 3
         local resizeWidth = settings.collisionMode == 2 or settings.collisionMode == 3
         local modelMins, modelMaxs = GetStableModelBounds(ply, ply.pmavDefaultHullMins, ply.pmavDefaultHullMaxs)
-        local modelScale = GetAdaptiveModelScale(ply, settings)
-        modelMins, modelMaxs = ScaleBounds(modelMins, modelMaxs, modelScale)
         local rule = GetRule(settings, ply:GetModel())
         local ruleCollisionHeight = GetRuleCollisionHeight(rule)
-        local bodyHeight = ruleCollisionHeight > 0 and ruleCollisionHeight * modelScale or GetPlayerAutoCollisionHeight(ply, settings, modelMins)
+        local bodyHeight = ruleCollisionHeight > 0 and ruleCollisionHeight or GetPlayerAutoCollisionHeight(ply, settings, modelMins)
         local hullHeight = resizeHeight and math.Clamp(bodyHeight + 6, 18, 180) or ply.pmavDefaultHullMaxs.z
         local duckHullHeight = resizeHeight and math.Clamp(math.min(duckHeight + 6, hullHeight), 12, 120) or ply.pmavDefaultDuckMaxs.z
         local hullMins = ply.pmavDefaultHullMins
@@ -1097,7 +956,7 @@ local function ApplyPlayer(ply)
 
         if resizeWidth then
             local minX, minY, maxX, maxY = GetPlayerBoneHorizontalBounds(ply, modelMins, modelMaxs, ply.pmavDefaultHullMins, ply.pmavDefaultHullMaxs)
-            minX, minY, maxX, maxY = ApplyRuleHorizontalOverrides(rule, minX, minY, maxX, maxY, modelScale)
+            minX, minY, maxX, maxY = ApplyRuleHorizontalOverrides(rule, minX, minY, maxX, maxY)
             minX, minY, maxX, maxY = ClampAutoHorizontalBounds(rule, minX, minY, maxX, maxY)
             minX, minY, maxX, maxY = LockAutoHorizontalAspect(rule, minX, minY, maxX, maxY)
 
@@ -1116,74 +975,19 @@ local function ApplyPlayer(ply)
             duckHullMaxs.y = maxY
         end
 
-        if tacMoveActive then
-            SetPlayerDuckHullCache(ply, ply.pmavDefaultDuckMins, ply.pmavDefaultDuckMaxs)
-            SetPlayerStandHullStable(ply, hullMins, hullMaxs)
-            RestoreAppliedMovementScale(ply)
-        else
-            SetPlayerHullStable(ply, hullMins, hullMaxs, duckHullMins, duckHullMaxs)
-            ApplyPlayerMovementScale(ply, settings, hullHeight, rule)
-        end
+        SetPlayerHullStable(ply, hullMins, hullMaxs, duckHullMins, duckHullMaxs)
+        ApplyPlayerMovementScale(ply, settings, hullHeight, rule)
     else
-        if tacMoveActive then
-            SetPlayerDuckHullCache(ply, ply.pmavDefaultDuckMins, ply.pmavDefaultDuckMaxs)
-            SetPlayerStandHullStable(ply, ply.pmavDefaultHullMins, ply.pmavDefaultHullMaxs)
-            RestoreAppliedMovementScale(ply)
-        else
-            SetPlayerHullStable(ply, ply.pmavDefaultHullMins, ply.pmavDefaultHullMaxs, ply.pmavDefaultDuckMins, ply.pmavDefaultDuckMaxs)
-            ApplyPlayerMovementScale(ply, settings, ply.pmavDefaultHullMaxs.z, GetRule(settings, ply:GetModel()))
-        end
+        SetPlayerHullStable(ply, ply.pmavDefaultHullMins, ply.pmavDefaultHullMaxs, ply.pmavDefaultDuckMins, ply.pmavDefaultDuckMaxs)
+        ApplyPlayerMovementScale(ply, settings, ply.pmavDefaultHullMaxs.z, GetRule(settings, ply:GetModel()))
     end
 end
-
-hook.Add("FinishMove", "pm_eblansky_adaptive_view_tacmove_camera", function(ply)
-    if not IsTacMoveActive() or not IsValid(ply) or not ply.pmavDefaultsCaptured then
-        return
-    end
-
-    local settings = GetSettingsForPlayer(ply)
-    local rule = settings and GetRule(settings, ply:GetModel())
-
-    if not settings or not settings.enabled or rule and rule.mode == "off" then
-        return
-    end
-
-    if not ply.pmavCurrentStandHeight or not ply.pmavCurrentDuckHeight then
-        return
-    end
-
-    SetPlayerViewOffsetsStable(
-        ply,
-        Vector(ply.pmavDefaultStand.x, ply.pmavDefaultStand.y, ply.pmavCurrentStandHeight),
-        Vector(ply.pmavDefaultDuck.x, ply.pmavDefaultDuck.y, ply.pmavCurrentDuckHeight)
-    )
-end)
 
 local function IsPlayerAdaptiveCollisionActive(ply)
     local settings = GetSettingsForPlayer(ply)
     local rule = settings and GetRule(settings, ply:GetModel())
 
     return settings and settings.enabled and settings.collision and settings.collisionMode > 0 and not (rule and rule.mode == "off")
-end
-
-local function HasNoCollideConstraintWithPlayer(ent, ply)
-    if not constraint or not isfunction(constraint.FindConstraints) then
-        return false
-    end
-
-    local constraints = constraint.FindConstraints(ent, "NoCollide")
-
-    if not istable(constraints) then
-        return false
-    end
-
-    for _, data in ipairs(constraints) do
-        if istable(data) and (data.Ent1 == ply or data.Ent2 == ply or data.Entity and data.Entity[ply]) then
-            return true
-        end
-    end
-
-    return false
 end
 
 local function ShouldStuckTraceHit(ply, ent)
@@ -1211,37 +1015,12 @@ local function ShouldStuckTraceHit(ply, ent)
         return false
     end
 
-    local shouldCollide = hook.Run("ShouldCollide", ply, ent)
-
-    if shouldCollide == false then
-        return false
-    end
-
-    if HasNoCollideConstraintWithPlayer(ent, ply) then
-        return false
-    end
-
     local collisionGroup = isfunction(ent.GetCollisionGroup) and ent:GetCollisionGroup() or COLLISION_GROUP_NONE
 
     if collisionGroup == COLLISION_GROUP_IN_VEHICLE or
-        collisionGroup == COLLISION_GROUP_DEBRIS or
         collisionGroup == COLLISION_GROUP_DEBRIS_TRIGGER or
-        collisionGroup == COLLISION_GROUP_INTERACTIVE_DEBRIS or
-        collisionGroup == COLLISION_GROUP_PASSABLE_DOOR or
-        collisionGroup == COLLISION_GROUP_WEAPON or
-        collisionGroup == COLLISION_GROUP_PROJECTILE or
-        collisionGroup == COLLISION_GROUP_DISSOLVING then
+        collisionGroup == COLLISION_GROUP_PASSABLE_DOOR then
         return false
-    end
-
-    local class = string.lower(tostring(ent:GetClass() or ""))
-
-    if string.StartWith(class, "prop_") and isfunction(ent.GetPhysicsObject) then
-        local phys = ent:GetPhysicsObject()
-
-        if IsValid(phys) and isfunction(phys.IsCollisionEnabled) and not phys:IsCollisionEnabled() then
-            return false
-        end
     end
 
     return true
@@ -1268,8 +1047,7 @@ local function TracePlayerHullAt(ply, pos)
         filter = function(ent)
             return ShouldStuckTraceHit(ply, ent)
         end,
-        mask = MASK_PLAYERSOLID,
-        collisiongroup = COLLISION_GROUP_PLAYER_MOVEMENT or COLLISION_GROUP_PLAYER
+        mask = MASK_PLAYERSOLID
     })
 end
 
@@ -1279,16 +1057,7 @@ local function IsPlayerHullStuck(ply, pos)
     return trace and (trace.StartSolid or trace.AllSolid or trace.Hit) or false
 end
 
-local function IsPlayerInNoclip(ply)
-    return IsValid(ply) and isfunction(ply.GetMoveType) and ply:GetMoveType() == MOVETYPE_NOCLIP
-end
-
 local function TryUnstuckPlayer(ply)
-    if IsPlayerInNoclip(ply) then
-        ply.pmavStuckSince = nil
-        return false
-    end
-
     local origin = ply:GetPos()
 
     if not IsPlayerHullStuck(ply, origin) then
@@ -1396,7 +1165,6 @@ local function ApplyEntity(ent)
     local resizeHeight = settings.collisionMode == 1 or settings.collisionMode == 3
     local resizeWidth = settings.collisionMode == 2 or settings.collisionMode == 3
     local modelMins, modelMaxs = GetStableModelBounds(ent, Vector(-16, -16, 0), Vector(16, 16, 72))
-    modelMins, modelMaxs = ScaleBounds(modelMins, modelMaxs, GetAdaptiveModelScale(ent, settings))
 
     local targetHeight = GetEntityTargetHeight(ent, settings, modelMins, modelMaxs)
 
@@ -1410,7 +1178,7 @@ local function ApplyEntity(ent)
 
     if resizeWidth then
         local minX, minY, maxX, maxY = GetSaneHorizontalBounds(modelMins, modelMaxs, ent.pmavDefaultCollisionMins, ent.pmavDefaultCollisionMaxs)
-        minX, minY, maxX, maxY = ApplyRuleHorizontalOverrides(rule, minX, minY, maxX, maxY, GetAdaptiveModelScale(ent, settings))
+        minX, minY, maxX, maxY = ApplyRuleHorizontalOverrides(rule, minX, minY, maxX, maxY)
         minX, minY, maxX, maxY = ClampAutoHorizontalBounds(rule, minX, minY, maxX, maxY)
         minX, minY, maxX, maxY = LockAutoHorizontalAspect(rule, minX, minY, maxX, maxY)
 
@@ -1445,23 +1213,6 @@ local function ScheduleAllEntitiesApply()
     end)
 end
 
-local function ResyncAllAdaptivePlayers()
-    for _, ply in ipairs(player.GetAll()) do
-        InvalidatePlayerStableState(ply)
-        ApplyPlayer(ply)
-    end
-
-    ScheduleAllEntitiesApply()
-end
-
-concommand.Add("pmav_resync_scale", function(ply)
-    if IsValid(ply) and not IsSettingsEditAllowed(ply) then
-        return
-    end
-
-    ResyncAllAdaptivePlayers()
-end)
-
 local function GetWorldSettingsSignature(settings)
     settings = settings or AV.SharedSettings or SanitizeSettings({})
     local ruleParts = {}
@@ -1491,12 +1242,6 @@ local function GetWorldSettingsSignature(settings)
         settings.adaptiveJump and "1" or "0",
         tostring(settings.autoScale or 0),
         tostring(settings.globalOffset or 0),
-        tostring(settings.cameraFov or 0),
-        tostring(settings.cameraOffsetX or 0),
-        tostring(settings.cameraOffsetY or 0),
-        settings.scaleSupport and "1" or "0",
-        tostring(settings.scaleMin or 0),
-        tostring(settings.scaleMax or 0),
         tostring(settings.minHeight or 0),
         tostring(settings.maxHeight or 0),
         table.concat(ruleParts, ",")
@@ -1744,18 +1489,7 @@ hook.Add("Think", "pm_eblansky_adaptive_view_stuck_watch", function()
     AV.NextStuckWatch = CurTime() + 0.25
 
     for _, ply in ipairs(player.GetAll()) do
-        local settings = IsValid(ply) and GetSettingsForPlayer(ply)
-        local modelScale = settings and GetAdaptiveModelScale(ply, settings) or 1
-
-        if IsValid(ply) and (not ply.pmavLastAdaptiveModelScale or math.abs(ply.pmavLastAdaptiveModelScale - modelScale) > 0.001) then
-            ply.pmavLastAdaptiveModelScale = modelScale
-            InvalidatePlayerStableState(ply)
-            ApplyPlayer(ply)
-        end
-
-        if IsValid(ply) and IsPlayerInNoclip(ply) then
-            ply.pmavStuckSince = nil
-        elseif IsValid(ply) and ply:Alive() and IsPlayerAdaptiveCollisionActive(ply) then
+        if IsValid(ply) and ply:Alive() and IsPlayerAdaptiveCollisionActive(ply) then
             if IsPlayerHullStuck(ply) then
                 ply.pmavStuckSince = ply.pmavStuckSince or CurTime()
 

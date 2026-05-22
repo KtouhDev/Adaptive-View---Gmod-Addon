@@ -9,12 +9,6 @@ local OpenThanksWindow
 local cvEnabled = CreateClientConVar("pmav_enabled", "1", true, false, "Enable Adaptive View add-on logic.")
 local cvAutoScale = CreateClientConVar("pmav_auto_scale", "0.92", true, false, "Part of model height used as eye height.")
 local cvGlobalOffset = CreateClientConVar("pmav_global_offset", "0", true, false, "Global camera height offset.")
-local cvCameraFov = CreateClientConVar("pmav_camera_fov", "0", true, false, "Reserved camera FOV override. 0 keeps the game default.")
-local cvCameraOffsetX = CreateClientConVar("pmav_camera_offset_x", "0", true, false, "Reserved camera local X offset.")
-local cvCameraOffsetY = CreateClientConVar("pmav_camera_offset_y", "0", true, false, "Reserved camera local Y offset.")
-local cvScaleSupport = CreateClientConVar("pmav_scale_support", "1", true, false, "Account for model scale from ULX scale and similar addons.")
-local cvScaleMin = CreateClientConVar("pmav_scale_min", "0.5", true, false, "Minimum model scale Adaptive View will use.")
-local cvScaleMax = CreateClientConVar("pmav_scale_max", "2", true, false, "Maximum model scale Adaptive View will use.")
 local cvSmooth = CreateClientConVar("pmav_smooth", "10", true, false, "Hidden option-switch smoothing speed.")
 local cvMinHeight = CreateClientConVar("pmav_min_height", "4", true, false, "Minimum standing camera height.")
 local cvMaxHeight = CreateClientConVar("pmav_max_height", "120", true, false, "Maximum standing camera height.")
@@ -45,17 +39,6 @@ local function NumberOr(value, fallback)
     end
 
     return value
-end
-
-local function GetLocalAdaptiveModelScale(ply)
-    if not cvScaleSupport:GetBool() or not IsValid(ply) or not isfunction(ply.GetModelScale) then
-        return 1
-    end
-
-    local minScale = math.max(cvScaleMin:GetFloat(), 0.01)
-    local maxScale = math.max(cvScaleMax:GetFloat(), minScale)
-
-    return math.Clamp(NumberOr(ply:GetModelScale(), 1), minScale, maxScale)
 end
 
 local function ClassLooksAdaptive(class)
@@ -347,7 +330,6 @@ end
 
 local function GetModelAutoHeight(ply)
     local modelHeight, followsPose = GetReferenceModelHeight(ply:GetModel())
-    local scale = GetLocalAdaptiveModelScale(ply)
 
     if not modelHeight or modelHeight <= 0 then
         if isfunction(ply.SetupBones) then
@@ -355,8 +337,6 @@ local function GetModelAutoHeight(ply)
         end
 
         modelHeight, followsPose = GetModelHeightFromEntity(ply)
-    else
-        modelHeight = modelHeight * scale
     end
 
     local minHeight = cvMinHeight:GetFloat()
@@ -386,7 +366,7 @@ local function GetTargetHeight(ply, duckAmount)
     local followsPose = false
 
     if rule and rule.mode == "height" then
-        standingHeight = rule.height * GetLocalAdaptiveModelScale(ply)
+        standingHeight = rule.height
     else
         standingHeight, followsPose = GetModelAutoHeight(ply)
     end
@@ -397,52 +377,18 @@ local function GetTargetHeight(ply, duckAmount)
         return standingHeight
     end
 
-    local tacMove = GetConVar("vb_movement")
-    local duckRatio = 0.4375
-
-    if not tacMove or not tacMove:GetBool() then
-        local baseStand = ply:GetViewOffset().z
-        local baseDuck = ply:GetViewOffsetDucked().z
-        duckRatio = baseStand ~= 0 and baseDuck / baseStand or duckRatio
-    end
-
+    local baseStand = ply:GetViewOffset().z
+    local baseDuck = ply:GetViewOffsetDucked().z
+    local duckRatio = baseStand ~= 0 and baseDuck / baseStand or 0.4375
     local duckHeight = math.max(standingHeight * duckRatio, 18)
 
     return Lerp(duckAmount, standingHeight, duckHeight)
 end
 
-hook.Add("FinishMove", "pm_eblansky_adaptive_view_tacmove_camera", function(ply)
-    if ply ~= LocalPlayer() or not IsValid(ply) or not cvEnabled:GetBool() then
-        return
-    end
-
-    local tacMove = GetConVar("vb_movement")
-
-    if not tacMove or not tacMove:GetBool() then
-        return
-    end
-
-    local standHeight = GetTargetHeight(ply, 0)
-    local duckHeight = GetTargetHeight(ply, 1)
-
-    if not standHeight or not duckHeight then
-        return
-    end
-
-    ply:SetViewOffset(Vector(0, 0, standHeight))
-    ply:SetViewOffsetDucked(Vector(0, 0, duckHeight))
-end)
-
 local function ResetSettingsExceptRules()
     RunConsoleCommand("pmav_enabled", "1")
     RunConsoleCommand("pmav_auto_scale", "0.92")
     RunConsoleCommand("pmav_global_offset", "0")
-    RunConsoleCommand("pmav_camera_fov", "0")
-    RunConsoleCommand("pmav_camera_offset_x", "0")
-    RunConsoleCommand("pmav_camera_offset_y", "0")
-    RunConsoleCommand("pmav_scale_support", "1")
-    RunConsoleCommand("pmav_scale_min", "0.5")
-    RunConsoleCommand("pmav_scale_max", "2")
     RunConsoleCommand("pmav_smooth", "10")
     RunConsoleCommand("pmav_min_height", "4")
     RunConsoleCommand("pmav_max_height", "120")
@@ -821,25 +767,6 @@ function OpenThanksWindow()
     addCredit("TotallyARussian", "For the idea of adding a width change, and separating the overview from the Box. (It's there now, but it's not implemented properly, this feature will manifest itself in the Rule menu update)", "https://steamcommunity.com/id/xXxedgemasterxXx")
     addCredit("TheRyleeFella", "Finding a bug related to grenades from ARC Escape From Tarkov.", "https://steamcommunity.com/profiles/76561199199788875")
     addCredit("KarmotineOverdose", "For the idea of sliders for movement speed and jump power adjustment!", "https://steamcommunity.com/id/karmotineov")
-    addCredit("TimRtec", "Reported a conflict with the \"TacMove\" addon related to movement speed and crouch height!", "https://steamcommunity.com/profiles/76561198234686368")
-    addCredit("mec fluuri", "For the suggestion of adding camera offset and POV settings to rules (planned for the new Modern UI, coming soon)", "https://steamcommunity.com/profiles/76561198122587193")
-    addCredit("Remenix", "For the suggestion of adding ULX command support", "https://steamcommunity.com/id/xinemer")
-end
-
-local function OpenModernRuleMenuNotice()
-    local frame = vgui.Create("DFrame")
-    frame:SetTitle("Adaptive View - Modern UI Update")
-    frame:SetSize(560, 230)
-    frame:Center()
-    frame:MakePopup()
-
-    local text = vgui.Create("RichText", frame)
-    text:Dock(FILL)
-    text:DockMargin(10, 8, 10, 10)
-    text:InsertColorChange(80, 180, 255, 255)
-    text:AppendText("About a future update for this menu\n\n")
-    text:InsertColorChange(235, 235, 235, 255)
-    text:AppendText("We are currently working on a new Modern Menu. This menu will include a more convenient visual setup for the highest point of the model's head, camera height, the lowest point for the feet, and easier hitbox customization for both height and width, along with other improvements")
 end
 
 local function AddAdaptiveViewMenu()
@@ -1082,9 +1009,6 @@ local function AddAdaptiveViewMenu()
             end
         end
 
-        local modernMenuButton = panel:Button("About a future update for this menu(Modern UI Uptdate)")
-        modernMenuButton.DoClick = OpenModernRuleMenuNotice
-
         panel:AddItem(list)
 
         local saveButton = panel:Button("Save model rule")
@@ -1148,12 +1072,6 @@ for _, convarName in ipairs({
     "pmav_enabled",
     "pmav_auto_scale",
     "pmav_global_offset",
-    "pmav_camera_fov",
-    "pmav_camera_offset_x",
-    "pmav_camera_offset_y",
-    "pmav_scale_support",
-    "pmav_scale_min",
-    "pmav_scale_max",
     "pmav_smooth",
     "pmav_min_height",
     "pmav_max_height",
@@ -1198,8 +1116,7 @@ timer.Create("pm_eblansky_adaptive_view_model_watch", 0.5, 0, function()
 
     AV.LastAliveState = alive
 
-    local scale = math.Round(GetLocalAdaptiveModelScale(ply), 3)
-    local state = model .. "|" .. tostring(alive) .. "|" .. tostring(scale)
+    local state = model .. "|" .. tostring(alive)
 
     if AV.LastSyncedState == state then
         return

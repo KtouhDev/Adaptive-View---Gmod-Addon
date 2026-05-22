@@ -1,23 +1,7 @@
 # Changelog
 
-## 2026-05-23
-
-- Added compatibility handling for TacMove crouch/movement behavior.
-- Adaptive View now avoids fighting TacMove's movement and duck-hull logic while keeping adaptive camera height active.
-- Added support for player model scale from `ulx scale` / `SetModelScale()`.
-- Added `pmav_scale_support`, `pmav_scale_min`, `pmav_scale_max`, and `pmav_resync_scale`.
-- Added automatic resync when a player's model scale changes.
-- Prepared hidden camera FOV and camera X/Y offset settings for the future Modern UI rule editor.
-- Added a Rules menu notice about the planned Modern UI update.
-- Added TimRtec, mec fluuri, and Remenix to the `Thank them!` credits window.
-
 ## 2026-05-20
 
-- Added TacMove compatibility handling: Adaptive View no longer fights TacMove's movement/duck-hull logic while keeping adaptive camera height active.
-- Fixed crouch camera restoration when another movement addon rewrites `ViewOffsetDucked`.
-- Fixed TacMove crouch-height prediction by using the normal GMod duck ratio instead of TacMove's taller tactical crouch offset.
-- Fixed movement compatibility with addons such as Tac-move by leaving WalkSpeed/RunSpeed/JumpPower untouched when Adaptive View movement scaling is disabled.
-- Fixed `Speed = 0` and `Jump force = 0` model-rule values so they truly mean `off`.
 - Added per-model `Speed` and `Jump force` rule values.
 - Added quick rule editor buttons: `Apply`, `Apply & Save`, and `Back to save`.
 - Changed quick rule editing so temporary Apply changes do not write to the local rules file.
