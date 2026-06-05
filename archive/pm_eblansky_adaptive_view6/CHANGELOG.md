@@ -1,18 +1,5 @@
 # Changelog
 
-## 2026-06-05
-
-- Added the new Modern UI rule editor, opened from `Edit Rules` in the Q-menu.
-- Added visual rule editing for camera height, crouch camera height, collision hull height, width/length bounds, camera X/Y offset, and physical attributes.
-- Added model preview, model rule lists, drag-and-drop rule creation, per-model previews, metric/imperial unit display, and live value syncing between the visual editor and rule fields.
-- Moved the old rule editor controls into a clearly marked `Legacy` section so existing manual workflows remain available.
-- Fixed Modern UI collision-height conversion so the visual hull height now matches the in-game adaptive hull much more closely.
-- Fixed NPC/NextBot collision height when using per-model rules by removing an extra server-side height padding value.
-- Improved rule handling for NPCs and other adaptive entities so matching model rules are applied more consistently.
-- Added clickable credits for R4YL0, mec fluuri, CokedBadger, and TOYO1515.
-- Kept adaptive speed, adaptive jump, and adaptive pickup weight disabled by default while still respecting saved user/server settings.
-- Updated Workshop package ignore rules so local mockups, SVG source files, and design-only assets are not packed into the `.gma`.
-
 ## 2026-05-23
 
 - Added compatibility handling for TacMove crouch/movement behavior.
