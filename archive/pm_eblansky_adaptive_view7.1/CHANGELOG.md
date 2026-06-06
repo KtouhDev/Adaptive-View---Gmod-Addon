@@ -1,10 +1,5 @@
 # Changelog
 
-## 2026-06-07
-
-- Fixed Modern UI per-model rule edits not always being saved after dragging visual handles or changing pin-camera settings.
-- Added ChloeV to the `Thank them!` credits window for reporting the Modern UI PM settings save bug.
-
 ## 2026-06-05
 
 - Added the new Modern UI rule editor, opened from `Edit Rules` in the Q-menu.

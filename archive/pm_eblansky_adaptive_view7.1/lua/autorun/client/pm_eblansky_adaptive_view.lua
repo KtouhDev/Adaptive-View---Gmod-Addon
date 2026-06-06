@@ -1647,7 +1647,6 @@ function OpenThanksWindow()
     addCredit("KarmotineOverdose", "For the idea of sliders for movement speed and jump power adjustment!", "https://steamcommunity.com/id/karmotineov")
     addCredit("TimRtec", "Reported a conflict with the \"TacMove\" addon related to movement speed and crouch height!", "https://steamcommunity.com/profiles/76561198234686368")
     addCredit("R4YL0", "Pointed out a bug with the \"Outfitter\" addon.", "https://steamcommunity.com/id/R4YL0")
-    addCredit("ChloeV", "Found a bug with PM settings saving in the new MUI.", "https://steamcommunity.com/profiles/76561198391574956")
     addCredit("mec fluuri", "Suggested camera offset settings.", "https://steamcommunity.com/profiles/76561198122587193")
     addCredit("CokedBadger", "Suggested \"Pin camera on eye height\".", "https://steamcommunity.com/id/10238714120938")
     addCredit("TOYO1515", "Suggested pickup strength depending on player model height.", "https://steamcommunity.com/id/TOYO151515")
@@ -4098,10 +4097,7 @@ local function OpenModernRuleMenu()
         updateModernGeneralLayout(generalPage:GetWide(), generalPage:GetTall())
         generalPage:InvalidateLayout(true)
         generalCanvas:InvalidateLayout(true)
-
-        if isfunction(applyModernRule) then
-            applyModernRule(true)
-        end
+        scheduleModernPreviewApply()
     end
 
     generalControls.pinSmooth.OnValueChanged = function(_, value)
@@ -4110,10 +4106,7 @@ local function OpenModernRuleMenu()
         end
 
         rule.pinEyeSmoothing = math.Clamp(NumberOr(value, 0.50), 0, 1)
-
-        if isfunction(applyModernRule) then
-            applyModernRule(true)
-        end
+        scheduleModernPreviewApply()
     end
 
     previewButton.DoClick = function()
@@ -4301,7 +4294,7 @@ local function OpenModernRuleMenu()
         self:MouseCapture(false)
 
         if shouldApply then
-            applyModernRule(true, true)
+            applyModernRule(false, true)
         end
     end
 
