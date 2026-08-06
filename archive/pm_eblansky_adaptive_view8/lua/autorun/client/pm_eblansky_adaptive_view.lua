@@ -24,13 +24,12 @@ local cvCollision = CreateClientConVar("pmav_collision", "1", true, false, "Resi
 local cvCollisionMode = CreateClientConVar("pmav_collision_mode", "3", true, false, "Adaptive collision mode: 0 none, 1 height, 2 width/length, 3 all.")
 local cvCollisionRadius = CreateClientConVar("pmav_collision_radius", "16", true, false, "Adaptive player collision hull half-width.")
 local cvCollisionOnlyPlayers = CreateClientConVar("pmav_collision_only_players", "0", true, false, "Apply Adaptive View collision only to players.")
-local cvNpcCollision = CreateClientConVar("pmav_npc_collision", "0", true, false, "Apply Adaptive View collision to NPCs and NextBots.")
+local cvNpcCollision = CreateClientConVar("pmav_npc_collision", "1", true, false, "Apply Adaptive View collision to NPCs and NextBots.")
 local cvMultiplayerSafe = CreateClientConVar("pmav_multiplayer_safe", "1", true, false, "Avoid shrinking player width/length in multiplayer.")
 local cvAdaptiveSpeed = CreateClientConVar("pmav_adaptive_speed", "0", true, false, "Scale walk/run speed from adaptive hitbox height.")
 local cvAdaptiveJump = CreateClientConVar("pmav_adaptive_jump", "0", true, false, "Scale jump power from adaptive hitbox height.")
 local cvAdaptivePickupWeight = CreateClientConVar("pmav_adaptive_pickup_weight", "0", true, false, "Apply Adaptive View pickup weight limits.")
 local cvDebugBounds = CreateClientConVar("pmav_debug_bounds", "0", true, false, "Draw Adaptive View debug collision bounds.")
-local cvNpcCollisionDefaultMigration = CreateClientConVar("pmav_npc_collision_default_migration", "0", true, false, "Internal Adaptive View migration for NPC collision default.")
 local cvSupportOutfitter = CreateClientConVar("pm_supp_outfitter", "1", true, false, "Enable compatibility support for Outfitter: Multiplayer Playermodels.")
 local cvSupportIKFoot = CreateClientConVar("pm_supp_ikfoot", "1", true, false, "Enable compatibility support for IK Foot System.")
 local cvModernUnits = CreateClientConVar("pmav_modern_units", "metric", true, false, "Modern UI units: metric or imperial.")
@@ -551,11 +550,6 @@ local function DrawMaterialCenteredFit(mat, centerX, centerY, maxW, maxH)
 end
 
 ReadRules()
-
-if cvNpcCollisionDefaultMigration:GetInt() < 1 then
-    RunConsoleCommand("pmav_npc_collision", "0")
-    RunConsoleCommand("pmav_npc_collision_default_migration", "1")
-end
 
 if not CanUseDebugBounds() and cvDebugBounds:GetBool() then
     RunConsoleCommand("pmav_debug_bounds", "0")
@@ -1272,7 +1266,7 @@ local function ResetSettingsExceptRules()
     RunConsoleCommand("pmav_collision_mode", "3")
     RunConsoleCommand("pmav_collision_radius", "16")
     RunConsoleCommand("pmav_collision_only_players", "0")
-    RunConsoleCommand("pmav_npc_collision", "0")
+    RunConsoleCommand("pmav_npc_collision", "1")
     RunConsoleCommand("pmav_multiplayer_safe", "1")
     RunConsoleCommand("pmav_adaptive_speed", "0")
     RunConsoleCommand("pmav_adaptive_jump", "0")

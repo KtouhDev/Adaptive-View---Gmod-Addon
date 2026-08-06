@@ -16,7 +16,6 @@ local ENTITY_DAMAGE_BOUNDS_GRACE = 2
 local MAX_NET_SETTINGS_BITS = 1024 * 1024
 local NET_SETTINGS_COOLDOWN = 0.25
 local MAX_MODEL_RULES = 512
-local MAX_MODEL_PATH_LEN = 260
 
 if SERVER then
     AddCSLuaFile("autorun/client/pm_eblansky_adaptive_view.lua")
@@ -89,16 +88,6 @@ end
 
 local function NormalizeModel(model)
     return string.lower(string.Trim(tostring(model or "")))
-end
-
-local function IsPlausibleModelPath(model)
-    model = NormalizeModel(model)
-
-    return model ~= "" and
-        #model <= MAX_MODEL_PATH_LEN and
-        string.StartWith(model, "models/") and
-        string.EndsWith(model, ".mdl") and
-        not string.find(model, "..", 1, true)
 end
 
 local function GetRuleModelAliases(model)
@@ -786,7 +775,7 @@ local function SanitizeSettings(settings)
             model = NormalizeModel(model)
             rule = SanitizeRule(rule)
 
-            if IsPlausibleModelPath(model) and rule then
+            if model ~= "" and rule then
                 rules[model] = rule
                 ruleCount = ruleCount + 1
             end
@@ -795,7 +784,7 @@ local function SanitizeSettings(settings)
 
     return {
         enabled = settings.enabled ~= false,
-        effectiveModel = IsPlausibleModelPath(settings.effectiveModel) and NormalizeModel(settings.effectiveModel) or "",
+        effectiveModel = NormalizeModel(settings.effectiveModel),
         autoScale = math.Clamp(NumberOr(settings.autoScale, 0.92), 0.1, 2),
         globalOffset = math.Clamp(NumberOr(settings.globalOffset, 0), -64, 64),
         cameraFov = math.Clamp(NumberOr(settings.cameraFov, 0), 0, 160),
@@ -812,7 +801,7 @@ local function SanitizeSettings(settings)
         collisionMode = math.Clamp(math.floor(NumberOr(settings.collisionMode, 3)), 0, 3),
         collisionRadius = math.Clamp(NumberOr(settings.collisionRadius, 16), 0, 24),
         collisionOnlyPlayers = settings.collisionOnlyPlayers == true,
-        npcCollision = settings.npcCollision == true,
+        npcCollision = settings.npcCollision ~= false,
         multiplayerSafe = settings.multiplayerSafe ~= false,
         adaptiveSpeed = settings.adaptiveSpeed == true,
         adaptiveJump = settings.adaptiveJump == true,
@@ -1202,7 +1191,7 @@ if CLIENT then
             collisionMode = ClientConVarInt("pmav_collision_mode", 3),
             collisionRadius = ClientConVarFloat("pmav_collision_radius", 16),
             collisionOnlyPlayers = ClientConVarBool("pmav_collision_only_players", false),
-            npcCollision = enabled and ClientConVarBool("pmav_npc_collision", false),
+            npcCollision = enabled and ClientConVarBool("pmav_npc_collision", true),
             multiplayerSafe = ClientConVarBool("pmav_multiplayer_safe", true),
             adaptiveSpeed = enabled and ClientConVarBool("pmav_adaptive_speed", false),
             adaptiveJump = enabled and ClientConVarBool("pmav_adaptive_jump", false),
@@ -1968,37 +1957,6 @@ local function IsPlayerInNoclip(ply)
     return IsValid(ply) and isfunction(ply.GetMoveType) and ply:GetMoveType() == MOVETYPE_NOCLIP
 end
 
-local function IsUnstuckPathReasonable(ply, origin, candidate)
-    if not IsValid(ply) or not origin or not candidate then
-        return false
-    end
-
-    local mins, maxs
-
-    if isfunction(ply.Crouching) and ply:Crouching() and isfunction(ply.GetHullDuck) then
-        mins, maxs = ply:GetHullDuck()
-    else
-        mins, maxs = ply:GetHull()
-    end
-
-    local trace = util.TraceHull({
-        start = candidate,
-        endpos = origin,
-        mins = mins,
-        maxs = maxs,
-        filter = function(ent)
-            return ShouldStuckTraceHit(ply, ent)
-        end,
-        mask = MASK_PLAYERSOLID,
-        collisiongroup = COLLISION_GROUP_PLAYER_MOVEMENT or COLLISION_GROUP_PLAYER
-    })
-
-    -- The original position may still be solid. Accept only exits where any
-    -- blocking hit is very close to that original stuck position, not halfway
-    -- through a wall or prop.
-    return trace and (not trace.Hit or trace.Fraction >= 0.82)
-end
-
 local function TryUnstuckPlayer(ply)
     if IsPlayerInNoclip(ply) then
         ply.pmavStuckSince = nil
@@ -2027,7 +1985,7 @@ local function TryUnstuckPlayer(ply)
             for _, direction in ipairs(directions) do
                 local candidate = origin + direction * radius + Vector(0, 0, z)
 
-                if not IsPlayerHullStuck(ply, candidate) and IsUnstuckPathReasonable(ply, origin, candidate) then
+                if not IsPlayerHullStuck(ply, candidate) then
                     ply:SetPos(candidate)
                     ply:SetLocalVelocity(vector_origin)
                     ply.pmavStuckSince = nil
@@ -2301,11 +2259,7 @@ net.Receive(NET_SETTINGS, function(_, ply)
         return
     end
 
-    local ok, incomingSettings = pcall(net.ReadTable)
-
-    if not ok or not istable(incomingSettings) then
-        return
-    end
+    local incomingSettings = net.ReadTable()
 
     CaptureDefaults(ply)
 

@@ -1,10 +1,5 @@
 # Changelog
 
-## 2026-08-06
-
-- Changed NPC / NextBot collision adaptation to be disabled by default. // WithOut fixing buuug,
-- Added a one-time migration that resets old saved `pmav_npc_collision` values to off after updating.
-- The NPC / NextBot collision checkbox still saves normally after the migration, so server owners can re-enable it manually if needed.
 ## 2026-06-07
 
 - Fixed Modern UI per-model rule edits not always being saved after dragging visual handles or changing pin-camera settings.
