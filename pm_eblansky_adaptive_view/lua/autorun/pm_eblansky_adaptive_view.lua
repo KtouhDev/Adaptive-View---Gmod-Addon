@@ -29,8 +29,8 @@ if SERVER then
     cvars.AddChangeCallback("pmav_alladmins", function(_, _, newValue)
         local enabled = tostring(newValue or "0") ~= "0"
         local message = enabled and
-            "[adaptive view] Переменная \"pmav_alladmins\" была изменена! Некоторые настройки могут не отображаться, введите \"spawnmenu_reload\" для перезагрузки его и получения функций которые сейчас не доступны." or
-            "[adaptive view] Переменная \"pmav_alladmins\" была изменена! Некоторые настройки больше не доступны и могут отображаться в Q-Menu, можете ввести \"spawnmenu_reload\", что-бы очистить меню adaptive view."
+            "[Adaptive View] pmav_alladmins ON. Run spawnmenu_reload." or
+            "[Adaptive View] pmav_alladmins OFF. Run spawnmenu_reload."
 
         PrintMessage(HUD_PRINTTALK, message)
     end, "pm_eblansky_adaptive_view_alladmins_notice")

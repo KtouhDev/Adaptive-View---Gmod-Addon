@@ -1658,9 +1658,6 @@ function OpenThanksWindow()
     addCredit("CokedBadger", "Suggested \"Pin camera on eye height\".", "https://steamcommunity.com/id/10238714120938")
     addCredit("TOYO1515", "Suggested pickup strength depending on player model height.", "https://steamcommunity.com/id/TOYO151515")
     addCredit("Remenix", "For the suggestion of adding ULX command support", "https://steamcommunity.com/id/xinemer")
-    addCredit("Nikit_holodilnik", "A report about a broken camera.", "https://steamcommunity.com/profiles/76561199415496684")
-    addCredit("Tempest", "The report where the command was not processed by the server.", "https://steamcommunity.com/profiles/76561199227607320")
-    addCredit("umi", "Reported a bug with ladders.", "https://steamcommunity.com/id/umiguro")
 end
 
 local function OpenModernRuleMenuNotice()

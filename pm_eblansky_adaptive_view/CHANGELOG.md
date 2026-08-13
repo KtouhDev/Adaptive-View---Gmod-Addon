@@ -2,6 +2,9 @@
 
 ## 2026-08-06
 
+- Added Nikit_holodilnik, Tempest, and umi to the `Thank them!` credits window.
+- Added `*.zip` to Workshop package ignore rules so local archives are not packed into the `.gma`.
+- Fixed `pmav_alladmins` chat notice exceeding GMod's `TextMsg` size limit.
 - Changed NPC / NextBot collision adaptation to be disabled by default. // WithOut fixing buuug,
 - Added a one-time migration that resets old saved `pmav_npc_collision` values to off after updating.
 - The NPC / NextBot collision checkbox still saves normally after the migration, so server owners can re-enable it manually if needed.

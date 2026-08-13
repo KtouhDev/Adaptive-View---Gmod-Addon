@@ -1,0 +1,20 @@
+{
+  "title": "Adaptive View",
+  "type": "tool",
+  "tags": [
+    "fun",
+    "realism"
+  ],
+  "ignore": [
+              ".git/",
+              ".psd",
+              "*.gma",
+              "*.md",
+              "*.txt",
+              "*.bak*",
+              "*.svg",
+              "*.lnk",
+              "makets/*",
+              "materials/4mo_icos/mui/Hey, here is source in .SVG format/"
+            ]
+}
